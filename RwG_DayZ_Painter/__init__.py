@@ -152,7 +152,7 @@ def load_settings():
         "mat_ambient": "1,1,1,1", "mat_diffuse": "1,1,1,1",
         "mat_forced": "0,0,0,1", "mat_emmisive": "0,0,0,0",
         "mat_specular": "0,0,0,1", "mat_power": "30.0",
-        "mat_fresnel": "#(ai,64,64,1)fresnel(0.4,0.2)",
+        "mat_fresnel_n": "0.4", "mat_fresnel_k": "0.2",
     }
     try:
         if os.path.exists(SETTINGS_FILE):
@@ -398,6 +398,21 @@ def _vec_str(vec):
 
 def _parse_vec(text):
     return [x.strip() for x in text.split(",") if x.strip()]
+
+
+def _parse_fresnel_nk(fresnel_str, default=("0.4", "0.2")):
+    """Pull the N and K out of a fresnel(...) string."""
+    m = re.search(r"fresnel\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)", fresnel_str or "")
+    if m:
+        return m.group(1), m.group(2)
+    return default
+
+
+def _build_fresnel(n, k):
+    """Build the standard Stage6 fresnel string from N and K."""
+    n = (n or "").strip() or "0.4"
+    k = (k or "").strip() or "0.2"
+    return f"#(ai,64,64,1)fresnel({n},{k})"
 
 
 # --------------------------------------------------------------------------- #
@@ -681,10 +696,23 @@ class RwGDock(QtWidgets.QWidget):
         self.mat_emmisive = self._val_row(layout, "emmisive", "mat_emmisive", "0,0,0,0")
         self.mat_specular = self._val_row(layout, "specular", "mat_specular", "0,0,0,1")
         self.mat_power = self._val_row(layout, "specularPower", "mat_power", "30.0")
-        self.mat_fresnel = self._val_row(layout, "fresnel", "mat_fresnel",
-                                         "#(ai,64,64,1)fresnel(0.4,0.2)")
-        self.mat_fresnel.setToolTip("Stage6 fresnel, e.g. #(ai,64,64,1)fresnel(N,K). "
-                                    "Metals use their N/K (Gold 0.3,3 - Iron 3.12,3.87 ...).")
+
+        # fresnel as separate N and K fields -> #(ai,64,64,1)fresnel(N,K)
+        frow = QtWidgets.QHBoxLayout()
+        flbl = QtWidgets.QLabel("fresnel")
+        flbl.setFixedWidth(92)
+        frow.addWidget(flbl)
+        frow.addWidget(QtWidgets.QLabel("N"))
+        self.mat_fresnel_n = QtWidgets.QLineEdit(str(self.s.get("mat_fresnel_n", "0.4")))
+        frow.addWidget(self.mat_fresnel_n)
+        frow.addWidget(QtWidgets.QLabel("K"))
+        self.mat_fresnel_k = QtWidgets.QLineEdit(str(self.s.get("mat_fresnel_k", "0.2")))
+        frow.addWidget(self.mat_fresnel_k)
+        tip = ("Fresnel N/K -> #(ai,64,64,1)fresnel(N,K). "
+               "Metals: Gold 0.3/3, Iron 3.12/3.87, Aluminum 1.3/7, Copper 2.08/7.15 ...")
+        self.mat_fresnel_n.setToolTip(tip)
+        self.mat_fresnel_k.setToolTip(tip)
+        layout.addLayout(frow)
 
         wrow = QtWidgets.QHBoxLayout()
         write_btn = QtWidgets.QPushButton("Write .rvmat")
@@ -814,7 +842,8 @@ class RwGDock(QtWidgets.QWidget):
             "mat_ambient": self.mat_ambient.text(), "mat_diffuse": self.mat_diffuse.text(),
             "mat_forced": self.mat_forced.text(), "mat_emmisive": self.mat_emmisive.text(),
             "mat_specular": self.mat_specular.text(), "mat_power": self.mat_power.text(),
-            "mat_fresnel": self.mat_fresnel.text(),
+            "mat_fresnel_n": self.mat_fresnel_n.text(),
+            "mat_fresnel_k": self.mat_fresnel_k.text(),
         })
         save_settings(self.s)
         return self.s
@@ -1146,7 +1175,9 @@ class RwGDock(QtWidgets.QWidget):
         self.mat_emmisive.setText(_vec_str(p["emmisive"]))
         self.mat_specular.setText(_vec_str(p["specular"]))
         self.mat_power.setText(str(p["specularPower"]))
-        self.mat_fresnel.setText(p["fresnel"])
+        n, k = _parse_fresnel_nk(p["fresnel"])
+        self.mat_fresnel_n.setText(n)
+        self.mat_fresnel_k.setText(k)
         self.status.setText(f"Loaded '{s['preset']}' values into the fields.")
 
     def on_use_textures_inside(self):
@@ -1182,7 +1213,9 @@ class RwGDock(QtWidgets.QWidget):
             if d.get(key):
                 edit.setText(d[key])
         if tex.get("FRESNEL"):
-            self.mat_fresnel.setText(tex["FRESNEL"])
+            n, k = _parse_fresnel_nk(tex["FRESNEL"])
+            self.mat_fresnel_n.setText(n)
+            self.mat_fresnel_k.setText(k)
 
     def _rvmat_out_path(self, s):
         return os.path.join(s["output"].strip(), f"{self._prefix(s)}.rvmat")
@@ -1223,7 +1256,8 @@ class RwGDock(QtWidgets.QWidget):
                 nohq=self.nohq_ref.text().strip() or None,
                 as_map=self.as_ref.text().strip() or None,
                 smdi=self.smdi_ref.text().strip() or None,
-                fresnel=self.mat_fresnel.text().strip() or p["fresnel"], env=p["env"],
+                fresnel=_build_fresnel(self.mat_fresnel_n.text(), self.mat_fresnel_k.text()),
+                env=p["env"],
                 ambient=_parse_vec(self.mat_ambient.text()),
                 diffuse=_parse_vec(self.mat_diffuse.text()),
                 forced_diffuse=_parse_vec(self.mat_forced.text()),
