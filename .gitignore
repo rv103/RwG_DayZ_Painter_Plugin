@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Plugin runtime settings (contains local machine paths)
+rwg_dayz_settings.json
+
+# Substance Painter projects / exports
+*.spp
+*.spt
+
+# OS
+.DS_Store
+Thumbs.db
