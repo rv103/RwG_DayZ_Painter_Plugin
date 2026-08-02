@@ -176,4 +176,8 @@ tables come from the RwG RVMat Speedo tool.
 
 ## License
 
-[MIT](LICENSE)
+Free for the community, but **not for sale** — see [LICENSE](LICENSE)
+(*RwG DayZ Texture Exporter License, non-commercial*). You may use, share and
+adapt it for free with credit; you may not sell it or put it behind a paywall,
+and all intellectual property stays with RwG. Anything you **make** with it
+(your textures / `.rvmat` files) is yours to use freely, including commercially.

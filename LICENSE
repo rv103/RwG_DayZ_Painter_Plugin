@@ -1,21 +1,52 @@
-MIT License
+RwG DayZ Texture Exporter — License (Non-Commercial) v1.0
 
-Copyright (c) 2026 RwG
+Copyright (c) 2026 RwG. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software, including its source code, bundled assets and documentation
+(the "Software"), is the intellectual property of RwG and is made available
+free of charge to the DayZ modding community.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Grant of rights
+   You are granted a worldwide, royalty-free, non-exclusive right to:
+   a) use the Software for any personal or DayZ-modding purpose;
+   b) copy and redistribute the Software; and
+   c) modify the Software and create derivative works,
+   provided that all conditions in Sections 2 and 3 are met.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. Conditions
+   a) Attribution — every copy, redistribution or derivative work must keep
+      this license, the copyright notice above, and clear credit to "RwG".
+   b) Keep it free and alike — any copy or derivative you distribute must be
+      distributed free of charge and under these same terms.
+   c) You must not remove or obscure authorship, credits or this license.
+
+3. Restrictions
+   a) No sale or commercialization — you may not sell, rent, sublicense for a
+      fee, paywall, bundle into a paid product or service, or otherwise
+      commercially exploit the Software or any derivative of it, in whole or in
+      part, or accept payment in exchange for providing it.
+   b) The Software may not be redistributed on stores or platforms that charge
+      for access to it.
+
+4. Your output is yours
+   This license restricts the Software itself only. Any textures, .rvmat files
+   or other content you create using the Software are entirely yours and are
+   not subject to this license — you may use them however you wish, including
+   commercially.
+
+5. Intellectual property
+   All rights, title and intellectual property in and to the Software remain
+   with RwG. No rights are granted except those expressly stated here; all
+   rights not expressly granted are reserved.
+
+6. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+7. Termination
+   Any breach of these terms automatically and immediately terminates the
+   rights granted to you under this license.
