@@ -117,5 +117,12 @@ def mod_relative_path(abs_path, drive_letter=None, config_path="config.cfg"):
         rel = path_rest.lstrip("\\/").replace("/", "\\")
         return rel, True
 
-    # Not on the mod drive -> not directly game-valid; return bare filename.
-    return ntpath.basename(abs_norm), False
+    # Not on the mod drive: keep the folder structure (drive stripped) so the
+    # path doesn't collapse to just a file name.
+    return path_rest.lstrip("\\/").replace("/", "\\") or ntpath.basename(abs_norm), False
+
+
+def abs_from_rel(rel, drive_letter):
+    """Join a mod-relative texture path with the mod drive -> absolute path."""
+    d = ntpath.splitdrive(ntpath.normpath(drive_letter))[0] or "P:"
+    return ntpath.normpath(d + "\\" + str(rel).lstrip("\\/"))
