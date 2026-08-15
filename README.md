@@ -12,30 +12,44 @@ inside Painter. It even generates the **damage variants** (`_worn` / `_damage`
 
 ## Highlights
 
-- **One-click DayZ export** from the active project — each map with its own
-  on/off toggle and resolution (256–2048), built from Painter's *converted*
-  maps so nothing comes out flat.
-- **Three `_smdi` methods**, including a physically-based one that reads each
-  metal's real reflectance from the base colour.
+- **One-click DayZ export** from the active project — `_co` / `_ca`, `_nohq`,
+  `_smdi`, `_as`, `_em` and `_mc` (macro), each with its own toggle and
+  resolution (256–2048), built from Painter's *converted* maps so nothing comes
+  out flat.
+- **Four `_smdi` methods** — Spec+Gloss, Met+Rough, a base-colour PBR method, and
+  the **canonical glTF** metal/rough → spec/gloss conversion, plus a matching
+  **Spec/Gloss `_co`** diffuse.
 - **Full `.rvmat` editor**: texture stages, material colours with live colour
-  pickers, a **visual Fresnel curve editor**, an environment-map dropdown, and
-  material presets with BI-correct fresnel N/K.
+  pickers and estimates, a **visual Fresnel curve editor**, an environment-map
+  dropdown, and material presets.
+- **Fresnel material library** — set fresnel N/K **+** the specular tint from a
+  named material (BI-correct metals + refractiveindex.info metals & dielectrics),
+  and **save your own** materials.
+- **Presets** — built-in materials and **your own saved presets** in one grouped
+  dropdown (Load / Save / delete); a one-click **specular tint** estimate from
+  the metal reflectance.
 - **Damage-variant generator** — pick a material family and stamp out the
   `_worn` / `_damage` / `_destruct` rvmats in one click (ported from RwG RVMat
   Speedo).
 - **Per-project settings** — your values travel with the `.spp`; a new project
-  starts from clean defaults.
-- **Tabbed or single-window** layout, your choice.
+  starts from clean defaults. **Tabbed or single-window** layout, your choice.
 
 ## Screenshots
 
-| Setup | Maps | RVMAT |
-|:---:|:---:|:---:|
-| ![Setup](docs/tab-setup.png) | ![Maps](docs/tab-maps.png) | ![RVMAT](docs/tab-rvmat.png) |
+**New in v0.4** — grouped presets (built-in + your own) and the Fresnel material
+library (N/K + specular tint, save your own):
 
-| Colour editor | Fresnel curve editor | Settings |
+| Preset dropdown (built-in + My presets) | material N/K row (N/K + specular tint) |
+|:---:|:---:|
+| ![Presets](docs/preset-dropdown.png) | ![Material N/K](docs/material-nk.png) |
+
+| Maps | RVMAT | Fresnel curve editor |
 |:---:|:---:|:---:|
-| ![Colour editor](docs/colour-editor.png) | ![Fresnel curve](docs/fresnel-curve.png) | ![Settings](docs/settings.png) |
+| ![Maps](docs/tab-maps.png) | ![RVMAT](docs/tab-rvmat.png) | ![Fresnel curve](docs/fresnel-curve.png) |
+
+| Setup | Colour editor | Settings |
+|:---:|:---:|:---:|
+| ![Setup](docs/tab-setup.png) | ![Colour editor](docs/colour-editor.png) | ![Settings](docs/settings.png) |
 
 ## Requirements
 
