@@ -6,7 +6,7 @@ plus optional `.paa` conversion and a full **`.rvmat`** editor, all from a dock
 inside Painter. It even generates the **damage variants** (`_worn` / `_damage`
 / `_destruct` …) for you.
 
-> **Preview · v0.3.0** — feedback and edge cases welcome!
+> **Preview · v0.4.0** — feedback and edge cases welcome!
 
 ![RwG DayZ Texture Exporter](docs/preview.png)
 
@@ -79,8 +79,10 @@ line sits at the bottom.
 Each map has its own checkbox and resolution.
 
 - **`_co`** — from Painter's **Diffuse** (metal/rough converted; metals go
-  black). *2D View* / *Base Color* are alternatives. Tick **alpha (`_ca`)** to
-  add an Opacity alpha and write it as `_ca` instead (transparent materials).
+  black). *2D View* / *Base Color* / *Base Color + Specular* / *Spec/Gloss
+  diffuse (glTF)* (`baseColor × 0.96 × (1 − metallic)`) are alternatives. Tick
+  **alpha (`_ca`)** to add an Opacity alpha and write it as `_ca` instead
+  (transparent materials).
 - **`_nohq`** — **Normal DirectX** for DayZ (normal channel + height + baked
   mesh normal, never flat). OpenGL is switchable and remembered per project.
 - **`_smdi`** — `R = white, G = specular, B = gloss`, with a source dropdown:
@@ -90,6 +92,9 @@ Each map has its own checkbox and resolution.
   - **Met+Rough+BaseColor (PBR)** — physically based: each metal takes its own
     reflectance from the (linearised) base-colour luminance; dielectrics keep
     the `0.04` floor.
+  - **Met→Spec/Gloss (glTF)** — the canonical glTF metal/rough → spec/gloss
+    conversion: `G = perceivedBrightness(mix(0.04, baseColor, metallic))`. Like
+    PBR, but with glTF's exact sqrt-weighted brightness metric.
   - Two sliders scale the **G** (specular) and **B** (gloss) channels.
 - **`_as`** — DayZ layout (R/B white, G = mixed AO). 512 is usually plenty.
 - **`_em`** *(optional)* — emissive / glow, straight from the Emissive channel.
@@ -105,16 +110,24 @@ A complete Super-shader `.rvmat` editor:
   file, stored mod-relative), **open** (view in TexView / your default app) and
   **default** (procedural value). **Use textures inside** fills the real
   exported paths.
-- **Material presets** — Default plus metals (Gold, Iron, Aluminum, Copper,
-  Silver, Steel, Titanium, Nickel, Chrome …) with BI-correct fresnel N/K.
-  *Load preset values* fills the fields.
+- **Preset** — one grouped dropdown: a *— Presets —* group (Default plus metals
+  Gold, Iron, Aluminum, Copper, Brass, Silver, Steel, Titanium, Nickel, Chrome …
+  with BI-correct fresnel N/K) and a *— My presets —* group (yours). **Load**
+  fills all material values; **Save** stores the current values as one of your
+  presets (asks a name); **✕** deletes one of yours. Your presets' folder is
+  configurable in **Settings**.
 - **Material colours** — `ambient / diffuse / forcedDiffuse / emmisive /
   specular` each show a **coloured button** previewing the value; click it for
   an **RGBA editor** (sliders + live preview + colour picker). Helpers: a
   **tint** icon (average base colour), an **estimate** icon (from the project's
-  roughness / emissive), and a **reset** icon.
+  roughness / emissive), and a **reset** icon. The **specular** row's estimate
+  reads the metal tint from the base colour (glTF `F0 = mix(0.04, baseColor,
+  metallic)`, averaged over the metallic pixels) — fills brass/copper in a click.
 - **Fresnel** — editable `N` / `K`, or the **Curve** editor: a live
   reflectance-vs-angle graph with an *Estimate from base colour* button.
+- **material N/K** — a fresnel helper: pick a material (BI-correct metals plus
+  refractiveindex.info metals & dielectrics — Glass, MgO, Sapphire, Diamond …,
+  each showing its `F0`) and **Apply** to set fresnel `N`/`K` + the specular tint.
 - **env** — dropdown of the DayZ `dz\data\data` environment maps (Stage7).
 - **Write `.rvmat`** / **Load existing** / **Open in MatEditor** with optional
   live **Auto-sync** back into the fields.

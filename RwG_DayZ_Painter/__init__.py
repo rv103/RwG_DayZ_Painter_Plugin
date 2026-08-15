@@ -48,9 +48,11 @@ from .core import rvmat_writer, paa_tools
 
 
 PLUGIN_TITLE = "RwG DayZ Texture Exporter"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.4.0"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(PLUGIN_DIR, "rwg_dayz_settings.json")
+# user-defined RVMAT material presets (global, shared across all projects)
+USER_PRESETS_FILE = os.path.join(PLUGIN_DIR, "rwg_dayz_user_presets.json")
 RES_OPTIONS = ["256", "512", "1024", "2048"]
 # derived from the shared preset table so new presets appear automatically
 PRESETS = list(rvmat_writer.MATERIAL_PRESETS.keys())
@@ -59,7 +61,10 @@ META_NORMAL_KEY = "normal_format"
 META_SETTINGS_KEY = "settings"
 MINI_BTN = 24          # square size for the small icon helper buttons
 # machine / UI settings that stay global (not saved per project)
-GLOBAL_KEYS = ("python", "imagetopaa", "mateditor", "texview", "drive", "layout_mode")
+GLOBAL_KEYS = ("python", "imagetopaa", "mateditor", "texview", "drive", "layout_mode",
+               "presets_path")
+USER_PRESETS_NAME = "rwg_dayz_user_presets.json"
+USER_FRESNEL_NAME = "rwg_dayz_user_fresnel.json"
 
 HELP_HTML = """
 <h3>RwG DayZ Texture Exporter</h3>
@@ -68,8 +73,10 @@ HELP_HTML = """
 
 <b>Setup</b>
 <ul>
-<li><b>Settings</b> (top button): the tool paths - Python (numpy+pillow, with Auto-detect),
-ImageToPAA.exe, MatEditor.exe.</li>
+<li><b>Settings</b> (top button): tool paths (Python with Auto-detect, ImageToPAA,
+MatEditor, TexView), the mod <b>Drive</b>, the panel layout, and <b>Prepare DayZ
+channels</b> - adds Emissive + Opacity + User0-User2 (colour) to the active texture set
+(for _em / _ca / _mc). Best baked into a Painter project template.</li>
 <li><b>Output folder</b>: best inside your <b>P:\\</b> mod path so the .rvmat gets game-valid paths.</li>
 <li><b>Prefix</b>: file-name base (wall -> wall_co.tga). <b>Use texture set name</b> fills it in.</li>
 </ul>
@@ -91,8 +98,14 @@ go full specular); <b>Met+Rough+BaseColor (PBR)</b> gives each metal its real
 reflectance from the base colour. G/B sliders default 1.0.</li>
 <li><b>_as</b>: DayZ layout, R/B white, G=mixed AO. 512 is usually enough.</li>
 <li><b>_em</b> (optional): emissive / glow, straight from the project's Emissive channel.</li>
+<li><b>_mc</b> (optional): macro, from a Painter <b>User channel</b> (User0-2, RGB), or
+<b>Combine</b> to stack all three with a blend mode. The <b>alpha</b> is the DayZ blend
+mask (1 = only macro, 0 = only base): <b>Auto</b> derives it from the macro's brightness
+(applies where you painted), or pick a channel / Opacity, or None for opaque. The path
+auto-fills the MC (Stage3) field. Use <b>Settings → Prepare DayZ channels</b> for the
+User channels.</li>
 </ul>
-<p>Each map has its own checkbox and size (256-2048). _em is off by default.
+<p>Each map has its own checkbox and size (256-2048). _em / _mc are off by default.
 _co and _ca are the same map - the <b>alpha (_ca)</b> tick decides which one is written.</p>
 
 <b>Export</b>
@@ -210,9 +223,10 @@ def load_settings():
         "imagetopaa": "", "drive": "P:\\",
         "normal_format": "directx",
         "co_on": True, "nohq_on": True, "smdi_on": True, "as_on": True,
-        "em_on": False, "co_alpha": False,
+        "em_on": False, "co_alpha": False, "mc_on": False, "mc_source": "User0",
+        "mc_blend": "Lighten", "mc_alpha": "Auto (macro)",
         "co_res": "2048", "nohq_res": "2048", "smdi_res": "2048", "as_res": "1024",
-        "em_res": "1024",
+        "em_res": "1024", "mc_res": "2048",
         "co_source": "diffuse",
         "smdi_source": "specgloss",
         "smdi_green": 1.0, "smdi_blue": 1.0,
@@ -226,6 +240,7 @@ def load_settings():
         "fresnel_fmt": "ai", "fresnel_w": "64", "fresnel_h": "64", "fresnel_levels": "1",
         "env": "",
         "layout_mode": "tabs",
+        "presets_path": "",
     }
     # global machine/UI keys come from the shared file (tool paths, layout)
     try:
@@ -278,6 +293,84 @@ def save_settings(settings):
     except Exception as e:
         splog.warning(f"[RwG] Could not save settings: {e}")
     save_project_settings(settings)
+
+
+# --------------------------------------------------------------------------- #
+#  user RVMAT presets (material values only, global, save/load by name)        #
+# --------------------------------------------------------------------------- #
+# Keys stored per user preset - only the material *values*, never texture paths.
+USER_PRESET_KEYS = ("mat_ambient", "mat_diffuse", "mat_forced", "mat_emmisive",
+                    "mat_specular", "mat_power", "mat_fresnel_n", "mat_fresnel_k",
+                    "env")
+
+
+def user_presets_file(folder=None):
+    """Resolve the presets JSON file. ``folder`` (from Settings) overrides the
+    default plugin folder; the file name itself is fixed."""
+    folder = (folder or "").strip()
+    if folder:
+        return os.path.join(folder, USER_PRESETS_NAME)
+    return USER_PRESETS_FILE
+
+
+def load_user_presets(folder=None):
+    """Return the dict of user-saved material presets ({name: {keys...}})."""
+    path = user_presets_file(folder)
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        splog.warning(f"[RwG] Could not read user presets: {e}")
+    return {}
+
+
+def save_user_presets(presets, folder=None):
+    """Persist the user preset dict to the configured presets file."""
+    path = user_presets_file(folder)
+    try:
+        d = os.path.dirname(os.path.abspath(path))
+        os.makedirs(d, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(presets, f, indent=2)
+    except Exception as e:
+        splog.warning(f"[RwG] Could not save user presets: {e}")
+
+
+def user_fresnel_file(folder=None):
+    """Resolve the user Fresnel-materials JSON file (same folder as presets)."""
+    folder = (folder or "").strip()
+    if folder:
+        return os.path.join(folder, USER_FRESNEL_NAME)
+    return os.path.join(PLUGIN_DIR, USER_FRESNEL_NAME)
+
+
+def load_user_fresnel(folder=None):
+    """Return the dict of user-saved Fresnel materials ({name: {n,k,specular}})."""
+    path = user_fresnel_file(folder)
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        splog.warning(f"[RwG] Could not read user Fresnel materials: {e}")
+    return {}
+
+
+def save_user_fresnel(mats, folder=None):
+    """Persist the user Fresnel-materials dict to the configured file."""
+    path = user_fresnel_file(folder)
+    try:
+        d = os.path.dirname(os.path.abspath(path))
+        os.makedirs(d, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(mats, f, indent=2)
+    except Exception as e:
+        splog.warning(f"[RwG] Could not save user Fresnel materials: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -521,6 +614,7 @@ def maps_from_export_paths(paths):
              ("normal", "normal"), ("roughness", "roughness"), ("metallic", "metallic"),
              ("emissive", "emissive"), ("emmisive", "emissive"),
              ("opacity", "opacity"),
+             ("user0", "user0"), ("user1", "user1"), ("user2", "user2"),
              ("_ao", "ao"), ("ao", "ao")]
     for p in paths:
         low = os.path.basename(p).lower()
@@ -896,16 +990,19 @@ class RwGDock(QtWidgets.QWidget):
         self.co_cb.setChecked(self.s.get("co_on", True))
         self.co_source = QtWidgets.QComboBox()
         self.co_source.addItems(["Diffuse (recommended)", "2D View", "Base Color",
-                                 "Base Color + Specular"])
+                                 "Base Color + Specular", "Spec/Gloss diffuse (glTF)"])
         self.co_source.setToolTip(
             "Diffuse - proper DayZ diffuse (metal/rough converted; metals go black).\n"
             "2D View - the flattened 2D viewport.\n"
             "Base Color - the raw albedo channel.\n"
-            "Base Color + Specular - albedo dimmed by specular.")
+            "Base Color + Specular - albedo dimmed by specular.\n"
+            "Spec/Gloss diffuse (glTF) - canonical baseColor*(1-0.04)*(1-metallic): "
+            "metals black, dielectrics keep 96%.")
         self.co_source.setCurrentText({"diffuse": "Diffuse (recommended)",
                                        "2d_view": "2D View",
                                        "base_color": "Base Color",
-                                       "base_color_specular": "Base Color + Specular"}.get(
+                                       "base_color_specular": "Base Color + Specular",
+                                       "specgloss": "Spec/Gloss diffuse (glTF)"}.get(
                                            self.s.get("co_source", "diffuse"),
                                            "Diffuse (recommended)"))
         # alpha toggle: off = _co, on = _ca (same source, plus an Opacity alpha)
@@ -937,10 +1034,11 @@ class RwGDock(QtWidgets.QWidget):
         self.smdi_cb.setChecked(self.s.get("smdi_on", True))
         self.smdi_source = QtWidgets.QComboBox()
         self.smdi_source.addItems(["Spec+Gloss (convert maps)", "Met+Rough (channels)",
-                                   "Met+Rough+BaseColor (PBR)"])
+                                   "Met+Rough+BaseColor (PBR)", "Met->Spec/Gloss (glTF)"])
         self.smdi_source.setCurrentText(
             {"metrough": "Met+Rough (channels)",
-             "pbr": "Met+Rough+BaseColor (PBR)"}.get(
+             "pbr": "Met+Rough+BaseColor (PBR)",
+             "gltf": "Met->Spec/Gloss (glTF)"}.get(
                 self.s.get("smdi_source"), "Spec+Gloss (convert maps)"))
         self.smdi_source.setToolTip(
             "How the _smdi is built:\n"
@@ -950,7 +1048,9 @@ class RwGDock(QtWidgets.QWidget):
             "channels; metals go to a flat full specular.\n"
             "  Met+Rough+BaseColor (PBR) - physically-based: each metal gets its own "
             "reflectance from the base-colour luminance (dull metal stays darker than "
-            "polished). Dielectrics keep the 0.04 floor.")
+            "polished). Dielectrics keep the 0.04 floor.\n"
+            "  Met->Spec/Gloss (glTF) - the canonical glTF conversion: G = perceived "
+            "brightness of mix(0.04, baseColor, metallic). Like PBR, canonical metric.")
         self.smdi_res = self._res_combo("smdi_res", "2048")
         grid.addWidget(self.smdi_cb, 3, 0)
         grid.addLayout(middle(self.smdi_source), 3, 1)
@@ -971,6 +1071,34 @@ class RwGDock(QtWidgets.QWidget):
         grid.addWidget(self.em_cb, 5, 0)
         grid.addLayout(middle("(Emissive channel)"), 5, 1)
         grid.addWidget(self.em_res, 5, 2)
+
+        # _mc (macro) - off by default; RGB from a Painter User channel
+        self.mc_cb = QtWidgets.QCheckBox("_mc")
+        self.mc_cb.setChecked(self.s.get("mc_on", False))
+        self.mc_source = QtWidgets.QComboBox()
+        self.mc_source.addItems(["User0", "User1", "User2", "Combine (User0-2)"])
+        self.mc_source.setCurrentText(self.s.get("mc_source", "User0"))
+        self.mc_source.setToolTip("Painter User channel to export as the macro (_mc), "
+                                  "or Combine to stack User0-2 together.")
+        self.mc_blend = QtWidgets.QComboBox()
+        self.mc_blend.addItems(["Lighten", "Screen", "Add", "Overlay",
+                                "Average", "Multiply", "Darken"])
+        self.mc_blend.setCurrentText(self.s.get("mc_blend", "Lighten"))
+        self.mc_blend.setToolTip("Blend mode when combining User channels. "
+                                 "Lighten / Screen / Add treat black as neutral, so you "
+                                 "can paint parts of the macro across different channels.")
+        self.mc_alpha = QtWidgets.QComboBox()
+        self.mc_alpha.addItems(["Auto (macro)", "None", "User0", "User1", "User2", "Opacity"])
+        self.mc_alpha.setCurrentText(self.s.get("mc_alpha", "Auto (macro)"))
+        self.mc_alpha.setToolTip("The _mc alpha = DayZ blend mask (1 = only macro, "
+                                 "0 = only base). Auto derives it from the macro's "
+                                 "brightness (applies where you painted); or pick a "
+                                 "channel; None = opaque.")
+        self.mc_res = self._res_combo("mc_res", "2048")
+        grid.addWidget(self.mc_cb, 6, 0)
+        grid.addLayout(middle("from", self.mc_source, self.mc_blend,
+                              "a:", self.mc_alpha), 6, 1)
+        grid.addWidget(self.mc_res, 6, 2)
 
         layout.addLayout(grid)
 
@@ -1038,18 +1166,36 @@ class RwGDock(QtWidgets.QWidget):
         self.smdi_ref = self._tex_row(layout, "SMDI:", "SMDI")
         self.mc_ref = self._tex_row(layout, "MC:", "MC")
 
-        r1 = QtWidgets.QHBoxLayout()
-        r1.addWidget(QtWidgets.QLabel("Preset:"))
+        # one preset row: built-in presets + your saved presets in a single
+        # grouped dropdown. Load applies the full material values; Save stores
+        # the current values as one of your presets; the cross deletes yours.
+        prow = QtWidgets.QHBoxLayout()
+        prow.setSpacing(4)
+        prow.addWidget(QtWidgets.QLabel("Preset:"))
         self.preset_combo = QtWidgets.QComboBox()
-        self.preset_combo.addItems(PRESETS)
-        self.preset_combo.setCurrentText(self.s.get("preset", "Default"))
-        r1.addWidget(self.preset_combo)
-        load_vals_btn = QtWidgets.QPushButton("Load preset values")
-        load_vals_btn.setToolTip("Fill the material value fields below from the selected preset.")
-        load_vals_btn.clicked.connect(self.on_load_preset_values)
-        r1.addWidget(load_vals_btn)
-        r1.addStretch(1)
-        layout.addLayout(r1)
+        self.preset_combo.setToolTip(
+            "Material presets. The '- Presets -' group is built in (metals etc.); "
+            "the '- My presets -' group is yours. Load fills all material values; "
+            "Save stores the current values as one of your presets.")
+        self._populate_preset_combo(select=self.s.get("preset", "Default"))
+        prow.addWidget(self.preset_combo, 1)
+        load_btn = QtWidgets.QPushButton("Load")
+        load_btn.setToolTip("Fill the material value fields below from the selected preset.")
+        load_btn.clicked.connect(self.on_load_preset)
+        prow.addWidget(load_btn)
+        save_btn = QtWidgets.QPushButton("Save")
+        save_btn.setToolTip("Save the current material values (ambient/diffuse/"
+                            "forcedDiffuse/emmisive/specular/specularPower/fresnel/env) "
+                            "as one of your presets (asks for a name).")
+        save_btn.clicked.connect(self.on_save_user_preset)
+        prow.addWidget(save_btn)
+        del_btn = QtWidgets.QPushButton("✕")
+        del_btn.setObjectName("mini")
+        del_btn.setFixedSize(MINI_BTN, MINI_BTN)
+        del_btn.setToolTip("Delete the selected preset (only your own presets).")
+        del_btn.clicked.connect(self.on_delete_user_preset)
+        prow.addWidget(del_btn)
+        layout.addLayout(prow)
 
         # material values - each its own editable text field
         tint_tip = ("Estimate: average (linearised) base colour as a tint. Use when _co "
@@ -1072,7 +1218,12 @@ class RwGDock(QtWidgets.QWidget):
                       "Estimate from the project's Emissive channel (avg glow colour).", 26, "spark")],
             color_title="emmisive")
         self.mat_specular = self._val_row(
-            layout, "specular", "mat_specular", "1,1,1,1", color_title="specular")
+            layout, "specular", "mat_specular", "1,1,1,1",
+            buttons=[("", self.on_estimate_specular_tint,
+                      "Estimate the specular tint from the metal reflectance "
+                      "(glTF F0 = mix(0.04, base colour, metallic), averaged over "
+                      "the metallic pixels). For brass/copper etc.", 26, "droplet")],
+            color_title="specular")
         self.mat_power = self._val_row(
             layout, "specularPower", "mat_power", "30.0",
             buttons=[("", self.on_estimate_specular_power,
@@ -1104,6 +1255,39 @@ class RwGDock(QtWidgets.QWidget):
         fresnel_btn.clicked.connect(self.on_fresnel_editor)
         frow.addWidget(fresnel_btn)
         layout.addLayout(frow)
+
+        # material library: set fresnel N/K + specular tint from a named material
+        # (BI-correct metals + refractiveindex.info metals & dielectrics).
+        mlrow = QtWidgets.QHBoxLayout()
+        mlrow.setSpacing(4)
+        mllbl = QtWidgets.QLabel("material N/K")
+        mllbl.setFixedWidth(92)
+        mlrow.addWidget(mllbl)
+        self.fresnel_mat_combo = QtWidgets.QComboBox()
+        self.fresnel_mat_combo.setToolTip(
+            "Set fresnel N/K + the specular tint from a material. The "
+            "'- Materials -' group is built in (BI metals + refractiveindex.info "
+            "metals & dielectrics); '- My materials -' is yours. Apply writes N, K "
+            "and specular; Save stores the current N/K + specular as a material.")
+        self._populate_fresnel_combo()
+        mlrow.addWidget(self.fresnel_mat_combo, 1)
+        apply_mat_btn = QtWidgets.QPushButton("Apply")
+        apply_mat_btn.setToolTip("Write this material's N, K and specular tint "
+                                 "into the fields above.")
+        apply_mat_btn.clicked.connect(self.on_apply_fresnel_material)
+        mlrow.addWidget(apply_mat_btn)
+        save_mat_btn = QtWidgets.QPushButton("Save")
+        save_mat_btn.setToolTip("Save the current fresnel N/K + specular tint as "
+                                "your own material (asks for a name).")
+        save_mat_btn.clicked.connect(self.on_save_fresnel_material)
+        mlrow.addWidget(save_mat_btn)
+        del_mat_btn = QtWidgets.QPushButton("✕")
+        del_mat_btn.setObjectName("mini")
+        del_mat_btn.setFixedSize(MINI_BTN, MINI_BTN)
+        del_mat_btn.setToolTip("Delete the selected material (only your own).")
+        del_mat_btn.clicked.connect(self.on_delete_fresnel_material)
+        mlrow.addWidget(del_mat_btn)
+        layout.addLayout(mlrow)
 
         # env (Stage7) - dropdown of the dz\data\data environment maps
         erow = QtWidgets.QHBoxLayout()
@@ -1201,6 +1385,8 @@ class RwGDock(QtWidgets.QWidget):
             self.as_res: "Output resolution for _as. 512 is usually plenty.",
             self.em_cb: "Export the _em (emissive / glow) from the project's Emissive channel.",
             self.em_res: "Output resolution for _em.",
+            self.mc_cb: "Export the _mc (macro) from a Painter User channel (RGB).",
+            self.mc_res: "Output resolution for _mc.",
             self.co_alpha_cb: "Export _co with an alpha channel (from Opacity) as _ca "
                               "instead - for transparent materials.",
             self.preset_combo: "Material preset for the .rvmat "
@@ -1434,7 +1620,8 @@ class RwGDock(QtWidgets.QWidget):
     # ---------- state ----------
     def _collect(self):
         src_map = {"Diffuse (recommended)": "diffuse", "2D View": "2d_view",
-                   "Base Color": "base_color", "Base Color + Specular": "base_color_specular"}
+                   "Base Color": "base_color", "Base Color + Specular": "base_color_specular",
+                   "Spec/Gloss diffuse (glTF)": "specgloss"}
         # python / imagetopaa / mateditor live in the Settings dialog (self.s)
         self.s.update({
             "output": self.output_edit.text(),
@@ -1443,16 +1630,20 @@ class RwGDock(QtWidgets.QWidget):
             "co_on": self.co_cb.isChecked(), "nohq_on": self.nohq_cb.isChecked(),
             "smdi_on": self.smdi_cb.isChecked(), "as_on": self.as_cb.isChecked(),
             "em_on": self.em_cb.isChecked(), "co_alpha": self.co_alpha_cb.isChecked(),
+            "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
+            "mc_blend": self.mc_blend.currentText(),
+            "mc_alpha": self.mc_alpha.currentText(),
             "co_res": self.co_res.currentText(), "nohq_res": self.nohq_res.currentText(),
             "smdi_res": self.smdi_res.currentText(), "as_res": self.as_res.currentText(),
-            "em_res": self.em_res.currentText(),
+            "em_res": self.em_res.currentText(), "mc_res": self.mc_res.currentText(),
             "co_source": src_map.get(self.co_source.currentText(), "base_color"),
-            "smdi_source": ("pbr" if "PBR" in self.smdi_source.currentText()
+            "smdi_source": ("gltf" if "glTF" in self.smdi_source.currentText()
+                            else "pbr" if "PBR" in self.smdi_source.currentText()
                             else "metrough" if self.smdi_source.currentText().startswith("Met")
                             else "specgloss"),
             "smdi_green": self.smdi_green.value() / 100.0,
             "smdi_blue": self.smdi_blue.value() / 100.0,
-            "preset": self.preset_combo.currentText(),
+            "preset": self._selected_builtin_preset(),
             "autosync": self.autosync_cb.isChecked(),
             "mode": "preset" if self.mode_combo.currentText() == "Painter preset" else "builtin",
             "painter_preset": self.painter_preset_edit.text(),
@@ -1771,6 +1962,41 @@ class RwGDock(QtWidgets.QWidget):
             splog.error(f"[RwG] {e}")
             self.status.setText(f"Error: {e}")
 
+    def on_estimate_specular_tint(self):
+        """Fill specular[] from the metal reflectance: the glTF F0 = mix(0.04,
+        base colour, metallic), averaged over the metallic pixels (sRGB)."""
+        export_dir = None
+        try:
+            plan = [{"fileName": "$textureSet_baseColor", "srcType": "documentMap",
+                     "srcName": "baseColor", "mode": "rgb"},
+                    {"fileName": "$textureSet_metallic", "srcType": "documentMap",
+                     "srcName": "metallic", "mode": "gray"}]
+            maps, export_dir, py = self._export_estimate_maps(plan, "_mat_src")
+            if not (maps.get("basecolor") and maps.get("metallic")):
+                raise RuntimeError("Needs base colour + metallic channels.")
+            summary = _exec_cli(py, ["--estimate-material",
+                                     "--basecolor", maps["basecolor"],
+                                     "--metallic", maps["metallic"]], splog.info)
+            tint = (summary or {}).get("specular_tint")
+            if not tint:
+                raise RuntimeError("Estimate failed: "
+                                   + ("; ".join((summary or {}).get("errors", [])) or "no result"))
+            self.mat_specular.setText(",".join(str(x) for x in tint))
+            frac = (summary or {}).get("metal_fraction")
+            if frac is not None and frac < 0.001:
+                self.status.setText("No metal in this project - specular kept white "
+                                    "(1,1,1,1).")
+            else:
+                self.status.setText(f"specular tint from metal reflectance: "
+                                    f"{self.mat_specular.text()} "
+                                    f"(metal {round((frac or 0)*100)}%).")
+        except Exception as e:
+            splog.error(f"[RwG] {e}")
+            self.status.setText(f"Error: {e}")
+        finally:
+            if export_dir and os.path.isdir(export_dir):
+                shutil.rmtree(export_dir, ignore_errors=True)
+
     def on_estimate_ambient_tint(self):
         try:
             self.mat_ambient.setText(self._estimate_albedo_tint())
@@ -1877,6 +2103,22 @@ class RwGDock(QtWidgets.QWidget):
         drow.addWidget(drive_field)
         v.addLayout(drow)
 
+        pprow = QtWidgets.QHBoxLayout()
+        pplab = QtWidgets.QLabel("My presets folder:")
+        pplab.setFixedWidth(150)
+        pprow.addWidget(pplab)
+        presets_field = QtWidgets.QLineEdit(self.s.get("presets_path", ""))
+        presets_field.setToolTip("Folder where your saved RVMAT material presets "
+                                 f"({USER_PRESETS_NAME}) are stored. Leave empty to keep "
+                                 "them next to the plugin. Put it in a synced/cloud "
+                                 "folder to share presets across machines.")
+        pprow.addWidget(presets_field)
+        ppb = QtWidgets.QPushButton("...")
+        ppb.setFixedWidth(30)
+        ppb.clicked.connect(lambda: self._browse(presets_field, True))
+        pprow.addWidget(ppb)
+        v.addLayout(pprow)
+
         lrow = QtWidgets.QHBoxLayout()
         llab = QtWidgets.QLabel("Panel layout:")
         llab.setFixedWidth(150)
@@ -1889,6 +2131,17 @@ class RwGDock(QtWidgets.QWidget):
         lrow.addWidget(layout_combo)
         lrow.addStretch(1)
         v.addLayout(lrow)
+
+        crow = QtWidgets.QHBoxLayout()
+        prep_btn = QtWidgets.QPushButton("Prepare DayZ channels")
+        prep_btn.setToolTip("Add Emissive, Opacity and User0-User2 (colour) to the "
+                            "active texture set if missing - for _em / _ca / _mc.")
+        prep_btn.clicked.connect(self.on_prepare_channels)
+        crow.addWidget(prep_btn)
+        crow.addWidget(QtWidgets.QLabel("adds Emissive + Opacity + User0-2 to the "
+                                        "active texture set"))
+        crow.addStretch(1)
+        v.addLayout(crow)
 
         v.addStretch(1)
         btns = QtWidgets.QHBoxLayout()
@@ -1907,10 +2160,16 @@ class RwGDock(QtWidgets.QWidget):
             self.s["mateditor"] = me_edit.text()
             self.s["texview"] = tv_edit.text()
             self.s["drive"] = drive_field.text().strip() or "P:\\"
+            self.s["presets_path"] = presets_field.text().strip()
             new_mode = "single" if layout_combo.currentText().startswith("Single") else "tabs"
             mode_changed = new_mode != self.s.get("layout_mode", "tabs")
             self.s["layout_mode"] = new_mode
             save_settings(self.s)
+            try:
+                self._refresh_user_presets()
+                self._populate_fresnel_combo()
+            except Exception:
+                pass
             if mode_changed and not self._rebuild_ui():
                 self.status.setText("Settings saved. Reload Plugins to apply the "
                                     "new panel layout.")
@@ -1935,6 +2194,71 @@ class RwGDock(QtWidgets.QWidget):
 
     def on_normal_changed(self, fmt):
         set_project_normal_format(fmt)
+
+    def on_prepare_channels(self):
+        """Add the Emissive + Opacity channels to the active texture set if they
+        are missing (so _em / _ca can be exported)."""
+        if not substance_painter.project.is_open():
+            self.status.setText("Open a project first."); return
+        if sptexset is None or not hasattr(sptexset, "get_active_stack"):
+            self.status.setText("Channel API not available in this Painter version.")
+            return
+        try:
+            stack = sptexset.get_active_stack()
+            CT = getattr(sptexset, "ChannelType", None)
+            CF = getattr(sptexset, "ChannelFormat", None)
+            if stack is None or CT is None or CF is None:
+                self.status.setText("Channel API not available in this Painter version.")
+                return
+
+            def enum(mod, *names):
+                for n in names:
+                    v = getattr(mod, n, None)
+                    if v is not None:
+                        return v
+                return None
+
+            emissive = enum(CT, "Emissive", "emissive")
+            opacity = enum(CT, "Opacity", "opacity")
+            col_fmt = enum(CF, "sRGB8", "RGB8", "sRGB16F")
+            gray_fmt = enum(CF, "L8", "L16", "L16F")
+            wanted = [("Emissive", emissive, col_fmt), ("Opacity", opacity, gray_fmt)]
+            # User0-User2 as colour channels (for the _mc macro)
+            for uname in ("User0", "User1", "User2"):
+                uch = enum(CT, uname, uname.lower())
+                if uch is not None:
+                    wanted.append((uname, uch, col_fmt))
+
+            try:
+                existing = set(stack.all_channels().keys())
+            except Exception:
+                existing = set()
+
+            added, present, failed = [], [], []
+            for name, ctype, cfmt in wanted:
+                if ctype is None or cfmt is None:
+                    failed.append(name); continue
+                if ctype in existing:
+                    present.append(name); continue
+                try:
+                    stack.add_channel(ctype, cfmt)
+                    added.append(name)
+                except Exception as e:
+                    splog.warning(f"[RwG] Could not add {name} channel: {e}")
+                    failed.append(name)
+
+            parts = []
+            if added:
+                parts.append("added " + ", ".join(added))
+            if present:
+                parts.append("already had " + ", ".join(present))
+            if failed:
+                parts.append("failed " + ", ".join(failed))
+            self.status.setText("DayZ channels: " + "; ".join(parts) + "."
+                                if parts else "Nothing to do.")
+        except Exception as e:
+            splog.error(f"[RwG] {e}")
+            self.status.setText(f"Error preparing channels: {e}")
 
     def on_use_texset_name(self):
         name = _active_texture_set_name()
@@ -1979,7 +2303,7 @@ class RwGDock(QtWidgets.QWidget):
                     add("$textureSet_view2d", "virtualMap", "View_2D", "rgb")
                 else:
                     add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
-                    if s["co_source"] == "base_color_specular":
+                    if s["co_source"] in ("base_color_specular", "specgloss"):
                         add("$textureSet_metallic", "documentMap", "metallic", "gray")
                 if s["co_alpha"]:                     # _ca variant needs opacity
                     add("$textureSet_opacity", "documentMap", "opacity", "gray")
@@ -1993,13 +2317,25 @@ class RwGDock(QtWidgets.QWidget):
                 else:
                     add("$textureSet_metallic", "documentMap", "metallic", "gray")
                     add("$textureSet_roughness", "documentMap", "roughness", "gray")
-                    if s["smdi_source"] == "pbr":
-                        # raw albedo carries each metal's F0 for the PBR method
+                    if s["smdi_source"] in ("pbr", "gltf"):
+                        # raw albedo carries each metal's F0 for PBR / glTF methods
                         add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
             if s["as_on"]:
                 add("$textureSet_ao", "virtualMap", "AO_Mixed", "gray")
             if s["em_on"]:
                 add("$textureSet_emissive", "documentMap", "emissive", "rgb")
+            if s["mc_on"]:
+                if s["mc_source"].startswith("Combine"):
+                    for u in ("user0", "user1", "user2"):
+                        add(f"$textureSet_{u}", "documentMap", u, "rgb")
+                else:
+                    uch = s["mc_source"].lower()      # user0 / user1 / user2
+                    add(f"$textureSet_{uch}", "documentMap", uch, "rgb")
+                a = s["mc_alpha"]                     # export the mask channel if needed
+                if a == "Opacity":
+                    add("$textureSet_opacity", "documentMap", "opacity", "gray")
+                elif a.startswith("User"):
+                    add(f"$textureSet_{a.lower()}", "documentMap", a.lower(), "gray")
             if not plan:
                 self.status.setText("Tick at least one map to export."); return
 
@@ -2011,7 +2347,9 @@ class RwGDock(QtWidgets.QWidget):
 
             args = ["--output", s["output"].strip(), "--prefix", prefix,
                     "--drive", s["drive"].strip() or "P:\\"]
-            co_mode = "base_color_specular" if s["co_source"] == "base_color_specular" else "base_color"
+            co_mode = ("base_color_specular" if s["co_source"] == "base_color_specular"
+                       else "specgloss" if s["co_source"] == "specgloss"
+                       else "base_color")
             # Painter's virtual maps are already in their final format, so the CLI
             # must NOT flip the normal - pass 'directx' to disable flipping.
             args += ["--co-mode", co_mode, "--normal-format", "directx",
@@ -2021,7 +2359,7 @@ class RwGDock(QtWidgets.QWidget):
                         "2d_view": maps.get("view2d")}.get(s["co_source"], maps.get("basecolor"))
             if s["co_on"] and co_input:
                 args += ["--basecolor", co_input, "--co-res", s["co_res"]]
-                if co_mode == "base_color_specular" and maps.get("metallic"):
+                if co_mode in ("base_color_specular", "specgloss") and maps.get("metallic"):
                     args += ["--metallic", maps["metallic"]]
                 if s["co_alpha"]:                     # export as _ca (colour + alpha)
                     args += ["--co-alpha"]
@@ -2034,9 +2372,9 @@ class RwGDock(QtWidgets.QWidget):
                     args += ["--smdi-mode", "specgloss",
                              "--spec-map", maps["specular"], "--gloss-map", maps["glossiness"],
                              "--smdi-res", s["smdi_res"]]
-                elif s["smdi_source"] == "pbr" and maps.get("metallic") and \
+                elif s["smdi_source"] in ("pbr", "gltf") and maps.get("metallic") and \
                         maps.get("roughness") and maps.get("basecolor"):
-                    args += ["--smdi-mode", "pbr",
+                    args += ["--smdi-mode", s["smdi_source"],
                              "--metallic", maps["metallic"], "--roughness", maps["roughness"],
                              "--smdi-basecolor", maps["basecolor"], "--smdi-res", s["smdi_res"]]
                 elif maps.get("metallic") and maps.get("roughness"):
@@ -2047,6 +2385,26 @@ class RwGDock(QtWidgets.QWidget):
                 args += ["--ao", maps["ao"], "--as-res", s["as_res"]]
             if s["em_on"] and maps.get("emissive"):
                 args += ["--emissive", maps["emissive"], "--em-res", s["em_res"]]
+            if s["mc_on"]:
+                if s["mc_source"].startswith("Combine"):
+                    mc_paths = [maps.get(u) for u in ("user0", "user1", "user2")]
+                    mc_paths = [p for p in mc_paths if p]
+                    if mc_paths:
+                        args += ["--mc"] + mc_paths + \
+                                ["--mc-blend", s["mc_blend"].lower(), "--mc-res", s["mc_res"]]
+                else:
+                    mc_src = maps.get(s["mc_source"].lower())
+                    if mc_src:
+                        args += ["--mc", mc_src, "--mc-res", s["mc_res"]]
+                # blend mask (alpha) for the _mc
+                a = s["mc_alpha"]
+                if "--mc" in args:
+                    if a == "Auto (macro)":
+                        args += ["--mc-alpha", "auto"]
+                    elif a == "Opacity" and maps.get("opacity"):
+                        args += ["--mc-alpha", maps["opacity"]]
+                    elif a.startswith("User") and maps.get(a.lower()):
+                        args += ["--mc-alpha", maps[a.lower()]]
             if make_paa:
                 args += ["--paa"]
                 if s["imagetopaa"].strip():
@@ -2180,17 +2538,82 @@ class RwGDock(QtWidgets.QWidget):
             rel, _ok = paa_tools.mod_relative_path(src, drive_letter=drive)
             return rel
         for suffix, edit in (("_nohq", self.nohq_ref), ("_as", self.as_ref),
-                             ("_smdi", self.smdi_ref)):
+                             ("_smdi", self.smdi_ref), ("_mc", self.mc_ref)):
             r = ref(suffix)
             if r:
                 edit.setText(r)
 
-    # ---------- rvmat ----------
-    def on_load_preset_values(self):
-        """Fill the material value fields from the selected preset (texture
-        paths are untouched)."""
-        s = self._collect()
-        p = rvmat_writer.MATERIAL_PRESETS.get(s["preset"], rvmat_writer.MATERIAL_PRESETS["Default"])
+    # ---------- rvmat presets (built-in + user, one grouped dropdown) ----------
+    def _populate_preset_combo(self, select=None):
+        """Fill the preset dropdown: a '- Presets -' group (built in) then a
+        '- My presets -' group (yours). Item data = ('builtin'|'user', name);
+        the group headers are disabled non-selectable rows."""
+        combo = getattr(self, "preset_combo", None)
+        if combo is None:
+            return
+
+        def header(text):
+            combo.addItem(text, None)
+            try:
+                combo.model().item(combo.count() - 1).setEnabled(False)
+            except Exception:
+                pass
+
+        combo.blockSignals(True)
+        combo.clear()
+        header("─ Presets ─")
+        for name in PRESETS:
+            combo.addItem(f"   {name}", ("builtin", name))
+        header("─ My presets ─")
+        users = sorted(load_user_presets(self._presets_folder()).keys(), key=str.lower)
+        if users:
+            for name in users:
+                combo.addItem(f"   {name}", ("user", name))
+        else:
+            combo.addItem("   (none saved)", None)
+            try:
+                combo.model().item(combo.count() - 1).setEnabled(False)
+            except Exception:
+                pass
+        # restore selection (by name), else first selectable item
+        target = None
+        if select:
+            for i in range(combo.count()):
+                d = combo.itemData(i)
+                if d and d[1] == select:
+                    target = i
+                    break
+        if target is None:
+            for i in range(combo.count()):
+                if combo.itemData(i):
+                    target = i
+                    break
+        if target is not None:
+            combo.setCurrentIndex(target)
+        combo.blockSignals(False)
+
+    def _selected_builtin_preset(self):
+        """The currently selected built-in preset name (falls back to the last
+        one) - kept valid for the .rvmat export path that needs a real preset."""
+        d = self.preset_combo.currentData() if hasattr(self, "preset_combo") else None
+        if d and d[0] == "builtin":
+            return d[1]
+        return self.s.get("preset", "Default")
+
+    def on_load_preset(self):
+        """Load the selected preset - built-in or one of yours - into the fields."""
+        d = self.preset_combo.currentData()
+        if not d:
+            self.status.setText("Pick a preset from the list first."); return
+        kind, name = d
+        if kind == "builtin":
+            self._apply_builtin_preset(name)
+        else:
+            self.on_load_user_preset(name)
+
+    def _apply_builtin_preset(self, name):
+        """Fill the material value fields from a built-in preset (textures kept)."""
+        p = rvmat_writer.MATERIAL_PRESETS.get(name, rvmat_writer.MATERIAL_PRESETS["Default"])
         self.mat_ambient.setText(_vec_str(p["ambient"]))
         self.mat_diffuse.setText(_vec_str(p["diffuse"]))
         self.mat_forced.setText(_vec_str(p["forcedDiffuse"]))
@@ -2202,7 +2625,229 @@ class RwGDock(QtWidgets.QWidget):
         self.mat_fresnel_k.setText(k)
         if p.get("env"):
             self.env_combo.setCurrentText(p["env"])
-        self.status.setText(f"Loaded '{s['preset']}' values into the fields.")
+        self.status.setText(f"Loaded preset '{name}' values into the fields.")
+
+    # ---------- fresnel material library (built-in + user) ----------
+    def _populate_fresnel_combo(self, select=None):
+        """Fill the material N/K dropdown: a '- Materials -' group (built in) then
+        a '- My materials -' group (yours). Item data = ('builtin'|'user', name)."""
+        combo = getattr(self, "fresnel_mat_combo", None)
+        if combo is None:
+            return
+
+        def header(text):
+            combo.addItem(text, None)
+            try:
+                combo.model().item(combo.count() - 1).setEnabled(False)
+            except Exception:
+                pass
+
+        self._fresnel_lib = rvmat_writer.fresnel_materials()
+        self._fresnel_user = load_user_fresnel(self._presets_folder())
+        combo.blockSignals(True)
+        combo.clear()
+        header("─ Materials ─")
+        for name, m in self._fresnel_lib.items():
+            f0 = rvmat_writer.fresnel_f0(m["n"], m["k"])
+            combo.addItem(f"   {name}   (F0 {f0:.3f})", ("builtin", name))
+        header("─ My materials ─")
+        if self._fresnel_user:
+            for name in sorted(self._fresnel_user.keys(), key=str.lower):
+                m = self._fresnel_user[name]
+                f0 = rvmat_writer.fresnel_f0(m.get("n", 1.5), m.get("k", 0.0))
+                combo.addItem(f"   {name}   (F0 {f0:.3f})", ("user", name))
+        else:
+            combo.addItem("   (none saved)", None)
+            try:
+                combo.model().item(combo.count() - 1).setEnabled(False)
+            except Exception:
+                pass
+        target = None
+        if select:
+            for i in range(combo.count()):
+                d = combo.itemData(i)
+                if d and d[1] == select:
+                    target = i
+                    break
+        if target is None:
+            for i in range(combo.count()):
+                if combo.itemData(i):
+                    target = i
+                    break
+        if target is not None:
+            combo.setCurrentIndex(target)
+        combo.blockSignals(False)
+
+    def _selected_fresnel_material(self):
+        """Return the (name, {n,k,specular}) for the current dropdown selection."""
+        d = self.fresnel_mat_combo.currentData()
+        if not d:
+            return None, None
+        kind, name = d
+        if kind == "builtin":
+            return name, (getattr(self, "_fresnel_lib", None)
+                          or rvmat_writer.fresnel_materials()).get(name)
+        return name, (getattr(self, "_fresnel_user", None) or {}).get(name)
+
+    def on_apply_fresnel_material(self):
+        """Set fresnel N/K + specular tint from the selected library material."""
+        name, m = self._selected_fresnel_material()
+        if not m:
+            self.status.setText("Pick a material from the list first."); return
+        self.mat_fresnel_n.setText(str(m["n"]))
+        self.mat_fresnel_k.setText(str(m["k"]))
+        self.mat_specular.setText(",".join(str(x) for x in m["specular"]))
+        f0 = rvmat_writer.fresnel_f0(m["n"], m["k"])
+        self.status.setText(f"{name}: fresnel({m['n']},{m['k']})  F0 {f0:.3f}  "
+                            f"specular {self.mat_specular.text()}")
+
+    def _parse_specular_field(self):
+        """Read the specular field as a 4-float list (padded/clamped to RGBA)."""
+        parts = [p.strip() for p in self.mat_specular.text().split(",")]
+        vals = []
+        for p in parts[:4]:
+            try:
+                vals.append(round(float(p), 4))
+            except ValueError:
+                vals.append(1.0)
+        while len(vals) < 4:
+            vals.append(1.0)
+        return vals
+
+    def on_save_fresnel_material(self):
+        """Save the current fresnel N/K + specular tint as a user material."""
+        d = self.fresnel_mat_combo.currentData()
+        suggested = d[1] if (d and d[0] == "user") else ""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Save material", "Material name:",
+            QtWidgets.QLineEdit.Normal, suggested)
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            self.status.setText("Enter a name to save the material."); return
+        try:
+            n = float(self.mat_fresnel_n.text())
+            k = float(self.mat_fresnel_k.text())
+        except ValueError:
+            self.status.setText("Fresnel N/K must be numbers."); return
+        folder = self._presets_folder()
+        mats = load_user_fresnel(folder)
+        mats[name] = {"n": n, "k": k, "specular": self._parse_specular_field()}
+        save_user_fresnel(mats, folder)
+        self._populate_fresnel_combo(select=name)
+        f0 = rvmat_writer.fresnel_f0(n, k)
+        self.status.setText(f"Saved material '{name}': fresnel({n},{k})  F0 {f0:.3f}")
+
+    def on_delete_fresnel_material(self):
+        """Delete the selected user material (built-in materials can't be deleted)."""
+        d = self.fresnel_mat_combo.currentData()
+        if not d or d[0] != "user":
+            self.status.setText("Select one of your materials to delete "
+                                "(built-in materials can't be deleted)."); return
+        name = d[1]
+        folder = self._presets_folder()
+        mats = load_user_fresnel(folder)
+        if name not in mats:
+            self.status.setText(f"No saved material named '{name}'."); return
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Delete material")
+        box.setIcon(QtWidgets.QMessageBox.Question)
+        box.setText(f"Delete your material '{name}'?")
+        box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        box.setDefaultButton(QtWidgets.QMessageBox.No)
+        run = getattr(box, "exec", None) or getattr(box, "exec_")
+        if run() != QtWidgets.QMessageBox.Yes:
+            self.status.setText("Delete cancelled."); return
+        del mats[name]
+        save_user_fresnel(mats, folder)
+        self._populate_fresnel_combo(select="")
+        self.status.setText(f"Deleted material '{name}'.")
+
+    # ---------- user (custom) material presets ----------
+    def _presets_folder(self):
+        return (self.s.get("presets_path") or "").strip()
+
+    def _refresh_user_presets(self, select=None):
+        """Repopulate the merged preset dropdown (built-in + user) from disk."""
+        try:
+            self._populate_preset_combo(select=select or self._selected_builtin_preset())
+        except Exception as e:
+            splog.warning(f"[RwG] user preset refresh: {e}")
+
+    def on_save_user_preset(self):
+        """Save the current material VALUES as one of your presets (asks a name)."""
+        d = self.preset_combo.currentData()
+        suggested = d[1] if (d and d[0] == "user") else ""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Save preset", "Preset name:", QtWidgets.QLineEdit.Normal, suggested)
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            self.status.setText("Enter a name to save the preset."); return
+        s = self._collect()
+        folder = self._presets_folder()
+        presets = load_user_presets(folder)
+        presets[name] = {k: s.get(k) for k in USER_PRESET_KEYS}
+        save_user_presets(presets, folder)
+        self._populate_preset_combo(select=name)
+        self.status.setText(f"Saved preset '{name}' -> {user_presets_file(folder)}")
+
+    def on_load_user_preset(self, name=None):
+        """Load one of your presets' material values; reset texture stages to
+        their procedural defaults (only numbers + default textures load)."""
+        if not name:
+            d = self.preset_combo.currentData()
+            name = d[1] if (d and d[0] == "user") else None
+        if not name:
+            self.status.setText("Pick one of your presets to load."); return
+        presets = load_user_presets(self._presets_folder())
+        p = presets.get(name)
+        if not p:
+            self.status.setText(f"No saved preset named '{name}'."); return
+        setters = {
+            "mat_ambient": self.mat_ambient, "mat_diffuse": self.mat_diffuse,
+            "mat_forced": self.mat_forced, "mat_emmisive": self.mat_emmisive,
+            "mat_specular": self.mat_specular, "mat_power": self.mat_power,
+            "mat_fresnel_n": self.mat_fresnel_n, "mat_fresnel_k": self.mat_fresnel_k,
+        }
+        for key, widget in setters.items():
+            if p.get(key) is not None:
+                widget.setText(str(p[key]))
+        if p.get("env"):
+            self.env_combo.setCurrentText(p["env"])
+        # reset texture stages to their procedural defaults
+        dflt = rvmat_writer.DEFAULT_TEXTURES
+        for edit, tkey in ((self.nohq_ref, "NOHQ"), (self.as_ref, "AS"),
+                           (self.smdi_ref, "SMDI"), (self.mc_ref, "MC")):
+            edit.setText(dflt[tkey])
+        self.status.setText(f"Loaded your preset '{name}' (textures reset to default).")
+
+    def on_delete_user_preset(self):
+        """Remove the selected user preset (built-in presets can't be deleted)."""
+        d = self.preset_combo.currentData()
+        if not d or d[0] != "user":
+            self.status.setText("Select one of your presets to delete "
+                                "(built-in presets can't be deleted)."); return
+        name = d[1]
+        folder = self._presets_folder()
+        presets = load_user_presets(folder)
+        if name not in presets:
+            self.status.setText(f"No saved preset named '{name}'."); return
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Delete preset")
+        box.setIcon(QtWidgets.QMessageBox.Question)
+        box.setText(f"Delete your preset '{name}'?")
+        box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        box.setDefaultButton(QtWidgets.QMessageBox.No)
+        run = getattr(box, "exec", None) or getattr(box, "exec_")
+        if run() != QtWidgets.QMessageBox.Yes:
+            self.status.setText("Delete cancelled."); return
+        del presets[name]
+        save_user_presets(presets, folder)
+        self._populate_preset_combo(select="")
+        self.status.setText(f"Deleted preset '{name}'.")
 
     def on_use_textures_inside(self):
         """Fill NOHQ/AS/SMDI with the real exported texture paths (mod-relative,

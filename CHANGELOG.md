@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.4.0 — Preview (2026-08-15)
+
+A conversion-accuracy + workflow release, focused on the metal/rough → DayZ
+spec/gloss pipeline and on taming the growing preset UI.
+
+### Maps
+
+- New **`_smdi` method — Met→Spec/Gloss (glTF)**: the canonical glTF conversion,
+  `G = perceivedBrightness(mix(0.04, baseColor, metallic))`, alongside the
+  existing Spec+Gloss / Met+Rough / PBR methods.
+- New **`_co` source — Spec/Gloss diffuse (glTF)**: `baseColor × (1 − 0.04) ×
+  (1 − metallic)` — metals black, dielectrics keep 96 %.
+- **`_mc`** (macro) export from a Painter **User** channel, or several combined
+  with a blend mode (Lighten / Screen / Add / Overlay / Average / Multiply /
+  Darken), with the DayZ alpha **blend mask** (Auto / None / a User channel /
+  Opacity).
+
+### RVMAT editor
+
+- **Fresnel material library** — a `material N/K` picker that sets fresnel N/K
+  **and** the specular tint in one click. 24 built-in materials: the BI-correct
+  metals plus more metals and dielectrics (Bronze, Zinc, Tin, Lead, Platinum,
+  Cobalt, Tungsten, Glass, Water, Ice, MgO, Sapphire, Quartz, Diamond), each
+  showing its `F0`.
+- **Save your own Fresnel materials** — store the current N/K + specular tint as
+  a named material (grouped `— Materials — / — My materials —`, with Save / ✕).
+- **Specular estimate** — fill `specular[]` from the metal reflectance
+  (glTF `F0 = mix(0.04, baseColor, metallic)`, averaged over the metallic
+  pixels); fills brass / copper in a click.
+- **Presets reworked** — built-in presets and **your own saved presets** now
+  live in one grouped dropdown (`— Presets — / — My presets —`) with **Load /
+  Save / ✕**; a delete confirmation dialog; your presets are saved to a
+  configurable folder.
+- New **Brass** material preset.
+
+### UI & settings
+
+- **My presets folder** setting — where your saved presets / materials live
+  (empty = next to the plugin; a synced folder shares them across machines).
+- **Prepare DayZ channels** button (Settings) — adds Emissive + Opacity +
+  User0–User2 to the active texture set for `_em` / `_ca` / `_mc`.
+
+### Docs
+
+- Full **`WIKI.md`** — a complete, wiki-ready manual (install, every tab, the
+  map formulas, recipes incl. the two-material cartridge, troubleshooting).
+- Companion project **RwG DayZ Super** — a Substance Painter viewport shader that
+  previews the DayZ look while you paint in metal/rough.
+
 ## v0.3.0 — Preview (2026-08-02)
 
 A big feature + workflow release.

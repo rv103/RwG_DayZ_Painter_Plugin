@@ -59,18 +59,32 @@ def _save(arr01, output_path, resolution=None):
 
 
 def convert_co_texture(base_color_path, metal_path, output_path,
-                       use_specular_conversion=False, resolution=1024):
+                       use_specular_conversion=False, resolution=1024,
+                       spec_gloss=False):
     """
     _co (diffuse / albedo).
 
-    In 'Base Color + Specular' mode the diffuse is dimmed by the specular
-    reflectance so that the energy that ends up in the specular response
-    (driven by the metallic map) is removed from the diffuse term.
+    Three modes:
+      * default            - the base colour, untouched.
+      * spec_gloss=True     - the canonical glTF metal/rough -> spec/gloss diffuse:
+                              diffuse = baseColor * (1 - 0.04) * (1 - metallic).
+                              Metals go black, dielectrics keep 96% of their
+                              albedo (the 4% that becomes the dielectric specular
+                              is removed). Needs the metallic map.
+      * use_specular_conversion=True - older 'Base Color + Specular' mode: the
+                              diffuse is dimmed by the specular reflectance's peak
+                              channel. Kept for back-compatibility.
     """
     try:
         base = _load_rgb(base_color_path)
 
-        if use_specular_conversion and metal_path:
+        if spec_gloss and metal_path:
+            metal = _load_gray(metal_path)[..., None]           # H x W x 1
+            # Canonical glTF spec/gloss diffuse.
+            diffuse = base * (1.0 - DIELECTRIC_F0) * (1.0 - metal)
+            _save(diffuse, output_path, resolution)
+            print(f"_co saved (spec/gloss diffuse): {output_path}")
+        elif use_specular_conversion and metal_path:
             metal = _load_gray(metal_path)[..., None]           # H x W x 1
             # Specular colour: metals reflect their base colour, dielectrics 0.04.
             specular = base * metal + (1.0 - metal) * DIELECTRIC_F0
@@ -120,6 +134,99 @@ def convert_em_texture(emissive_path, output_path, resolution=1024):
         return output_path
     except Exception as e:
         print(f"Error creating _em texture: {e}")
+        raise
+
+
+def _apply_mc_alpha(rgb, alpha):
+    """Attach the macro blend mask as the _mc alpha channel.
+
+    DayZ blends base<->macro by the macro's alpha (1 = only macro, 0 = only base).
+    `alpha` is None (no alpha, opaque), the string "auto" (derive the mask from the
+    macro's own luminance - so it applies where you painted), or a path to a
+    grayscale mask.
+    """
+    if alpha is None:
+        return rgb
+    if alpha == "auto":
+        # "where painted" - brightest channel, so any painted colour = full mask,
+        # black = no macro (independent of hue)
+        a = rgb.max(axis=2)
+    else:
+        a = _load_gray(alpha)
+        if a.shape != rgb.shape[:2]:
+            img = Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8), "L")
+            img = img.resize((rgb.shape[1], rgb.shape[0]), Image.LANCZOS)
+            a = np.asarray(img, dtype=np.float32) / 255.0
+    return np.dstack([rgb, np.clip(a, 0.0, 1.0)])
+
+
+def _blend_pair(a, b, mode):
+    """Blend two [0,1] RGB arrays. For 'lighten'/'screen'/'add' black is neutral,
+    so unpainted (black) User channels don't ruin the mix."""
+    if mode == "lighten":
+        return np.maximum(a, b)
+    if mode == "darken":
+        return np.minimum(a, b)
+    if mode == "add":
+        return np.clip(a + b, 0.0, 1.0)
+    if mode == "screen":
+        return 1.0 - (1.0 - a) * (1.0 - b)
+    if mode == "multiply":
+        return a * b
+    if mode == "average":
+        return (a + b) * 0.5
+    if mode == "overlay":
+        return np.where(a < 0.5, 2.0 * a * b, 1.0 - 2.0 * (1.0 - a) * (1.0 - b))
+    return np.maximum(a, b)
+
+
+def convert_mc_combined(user_paths, output_path, blend="lighten", resolution=1024,
+                        alpha=None):
+    """
+    _mc built by stacking several Painter User channels on top of each other with
+    a blend mode (default 'lighten' - black areas stay neutral, so you can paint
+    parts of the macro across different User channels). `alpha` sets the DayZ blend
+    mask (see _apply_mc_alpha).
+    """
+    try:
+        base = None
+        for p in user_paths:
+            if not p:
+                continue
+            arr = _load_rgb(p)
+            if base is None:
+                base = arr
+                continue
+            if arr.shape != base.shape:
+                img = Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8), "RGB")
+                img = img.resize((base.shape[1], base.shape[0]), Image.LANCZOS)
+                arr = np.asarray(img, dtype=np.float32) / 255.0
+            base = _blend_pair(base, arr, blend)
+        if base is None:
+            raise ValueError("No User channels supplied for the combined _mc.")
+        out = _apply_mc_alpha(np.clip(base, 0.0, 1.0), alpha)
+        _save(out, output_path, resolution)
+        print(f"_mc saved (combined {len(user_paths)} User channels, {blend}, "
+              f"alpha={alpha}): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating combined _mc texture: {e}")
+        raise
+
+
+def convert_mc_texture(user_path, output_path, resolution=1024, alpha=None):
+    """
+    _mc (macro) - the macro / large-scale colour variation from a Painter User
+    channel. DayZ blends base<->macro by the alpha channel, so `alpha` sets the
+    mask (see _apply_mc_alpha).
+    """
+    try:
+        mc = _apply_mc_alpha(_load_rgb(user_path), alpha)
+        _save(mc, output_path, resolution)
+        print(f"_mc saved (macro, alpha={alpha}): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating _mc texture: {e}")
         raise
 
 
@@ -223,6 +330,51 @@ def convert_smdi_pbr(metal_path, roughness_path, basecolor_path, output_path,
         return output_path
     except Exception as e:
         print(f"Error creating _smdi (PBR) texture: {e}")
+        raise
+
+
+def _perceived_brightness(rgb):
+    """glTF getPerceivedBrightness: sqrt(0.299 R^2 + 0.587 G^2 + 0.114 B^2)."""
+    return np.sqrt(0.299 * rgb[..., 0] ** 2
+                   + 0.587 * rgb[..., 1] ** 2
+                   + 0.114 * rgb[..., 2] ** 2)
+
+
+def convert_smdi_gltf(metal_path, roughness_path, basecolor_path, output_path,
+                      specular_factor=1.0, glossiness_factor=1.0, resolution=1024):
+    """
+    _smdi packed with the canonical glTF metal/rough -> spec/gloss specular level.
+
+        R = 1.0 (white)
+        G = perceivedBrightness( mix(0.04, baseColor_linear, metallic) )
+        B = gloss = 1 - roughness
+
+    This is the exact glTF forward conversion: the specular colour is the
+    per-channel F0 = mix(0.04, baseColor, metallic), and its single-channel level
+    for _smdi is glTF's perceived brightness (sqrt-weighted luma) rather than a
+    flat Rec.709 luminance. Very close to the 'pbr' method, just the canonical
+    brightness metric.
+    """
+    try:
+        if not (metal_path and roughness_path and basecolor_path):
+            raise ValueError("metallic, roughness and base colour are required "
+                             "for the glTF _smdi method.")
+        metal = _load_gray(metal_path)[..., None]
+        rough = _load_gray(roughness_path)
+        base_lin = _srgb_to_linear(_load_rgb(basecolor_path))
+        # Colored F0, then glTF perceived brightness for the single SMDI level.
+        f0 = base_lin * metal + (1.0 - metal) * DIELECTRIC_F0
+        level = _perceived_brightness(f0)
+
+        red = np.ones_like(rough)
+        green = np.clip(level * specular_factor, 0.0, 1.0)
+        blue = np.clip((1.0 - rough) * glossiness_factor, 0.0, 1.0)
+        smdi = np.stack([red, green, blue], axis=2)
+        _save(smdi, output_path, resolution)
+        print(f"_smdi saved (glTF spec/gloss level): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating _smdi (glTF) texture: {e}")
         raise
 
 

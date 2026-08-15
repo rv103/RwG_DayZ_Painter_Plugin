@@ -206,6 +206,17 @@ MATERIAL_PRESETS = {
         "fresnel": "#(ai,64,64,1)fresnel(2.08,7.15)",
         "env": "dz\\data\\data\\env_land_co.paa",
     },
+    "Brass": {
+        # copper-zinc alloy: warm yellow reflectance sitting between Copper
+        # (redder) and Gold (purer yellow). Colour rides in the specular tint;
+        # fresnel N/K keep the reflectance a touch below gold. Good for cartridge
+        # cases - lower specularPower for worn/matte brass.
+        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
+        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
+        "specular": (0.91, 0.74, 0.42, 1), "specularPower": 200.0,
+        "fresnel": "#(ai,64,64,1)fresnel(0.44,3.0)",
+        "env": "dz\\data\\data\\env_land_co.paa",
+    },
     "Silver": {
         "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
         "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
@@ -251,6 +262,76 @@ MATERIAL_PRESETS = {
         "env": "dz\\data\\data\\env_land_co.paa",
     },
 }
+
+
+# --------------------------------------------------------------------------- #
+#  Fresnel material library (N/K + specular tint)                              #
+# --------------------------------------------------------------------------- #
+def fresnel_f0(n, k=0.0):
+    """Reflectance at normal incidence from a complex index of refraction.
+    Dielectric (k=0): ((n-1)/(n+1))^2. Metals include the absorption k."""
+    try:
+        n = float(n); k = float(k)
+    except (TypeError, ValueError):
+        return 0.04
+    num = (n - 1.0) ** 2 + k * k
+    den = (n + 1.0) ** 2 + k * k
+    return num / den if den else 0.0
+
+
+def _fresnel_nk_from_texture(fresnel_texture):
+    """Pull the scalar (N, K) out of a '#(ai,..)fresnel(N,K)' texture string."""
+    m = re.search(r"fresnel\(([^,]+),([^)]+)\)", fresnel_texture or "")
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2))
+        except ValueError:
+            pass
+    return 1.5, 0.0
+
+
+# Metals whose DayZ-correct (BI Super shader) N/K + specular already live in the
+# preset table - reused here so the library stays consistent with the presets.
+_PRESET_FRESNEL_NAMES = ("Gold", "Iron", "Aluminum", "Copper", "Brass", "Silver",
+                         "Steel", "Titanium", "Nickel", "Chrome")
+
+# Extra materials NOT in the preset table. N/K are representative visible-band
+# values from refractiveindex.info (single scalar for the DayZ fresnel stage);
+# specular[] is the material's reflectance tint. Dielectrics have K = 0, so their
+# whole look rides on N -> a low F0 (e.g. glass 0.04, MgO ~0.073, diamond ~0.17).
+# The metal N/K here are approximate - refine per material if you need exact.
+FRESNEL_EXTRA = {
+    # --- additional metals / alloys ---
+    "Bronze":          {"n": 1.18, "k": 3.5, "specular": (0.80, 0.57, 0.37, 1)},
+    "Zinc":            {"n": 1.0,  "k": 5.0, "specular": (0.80, 0.83, 0.85, 1)},
+    "Tin":             {"n": 1.5,  "k": 5.0, "specular": (0.79, 0.78, 0.74, 1)},
+    "Lead":            {"n": 2.0,  "k": 3.4, "specular": (0.63, 0.63, 0.66, 1)},
+    "Platinum":        {"n": 2.33, "k": 4.0, "specular": (0.67, 0.64, 0.58, 1)},
+    "Cobalt":          {"n": 2.2,  "k": 4.0, "specular": (0.66, 0.66, 0.64, 1)},
+    "Tungsten":        {"n": 3.6,  "k": 2.8, "specular": (0.50, 0.50, 0.50, 1)},
+    # --- dielectrics (K = 0; F0 comes from N) ---
+    "Glass (n1.5)":    {"n": 1.5,  "k": 0.0, "specular": (0.25, 0.25, 0.25, 1)},
+    "Water (n1.33)":   {"n": 1.33, "k": 0.0, "specular": (0.15, 0.15, 0.15, 1)},
+    "Ice (n1.31)":     {"n": 1.31, "k": 0.0, "specular": (0.14, 0.14, 0.14, 1)},
+    "MgO (n1.74)":     {"n": 1.74, "k": 0.0, "specular": (0.30, 0.30, 0.30, 1)},
+    "Sapphire (n1.77)": {"n": 1.77, "k": 0.0, "specular": (0.31, 0.31, 0.31, 1)},
+    "Quartz (n1.55)":  {"n": 1.55, "k": 0.0, "specular": (0.26, 0.26, 0.26, 1)},
+    "Diamond (n2.42)": {"n": 2.42, "k": 0.0, "specular": (0.55, 0.55, 0.55, 1)},
+}
+
+
+def fresnel_materials():
+    """Ordered {name: {n, k, specular}} library for the plugin's N/K picker:
+    the preset metals (BI-correct) first, then the extra metals + dielectrics."""
+    out = {}
+    for name in _PRESET_FRESNEL_NAMES:
+        p = MATERIAL_PRESETS.get(name)
+        if not p:
+            continue
+        n, k = _fresnel_nk_from_texture(p.get("fresnel"))
+        out[name] = {"n": n, "k": k, "specular": p.get("specular", (1, 1, 1, 1))}
+    out.update(FRESNEL_EXTRA)
+    return out
 
 
 def _fmt_vec(vec):

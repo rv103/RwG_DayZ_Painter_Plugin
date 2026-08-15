@@ -46,8 +46,10 @@ def run(args):
                     args.basecolor, args.co_opacity, out("_ca"), co_res)
             else:
                 use_spec = args.co_mode == "base_color_specular"
+                spec_gloss = args.co_mode == "specgloss"
                 result["tga"]["_co"] = conversion.convert_co_texture(
-                    args.basecolor, args.metallic, out("_co"), use_spec, co_res)
+                    args.basecolor, args.metallic, out("_co"), use_spec, co_res,
+                    spec_gloss=spec_gloss)
         except Exception as e:
             result["errors"].append(f"_co/_ca: {e}")
 
@@ -62,7 +64,15 @@ def run(args):
     smdi_mode = args.smdi_mode
     smdi_res = _res(args.smdi_res, args.resolution)
     try:
-        if smdi_mode == "pbr":
+        if smdi_mode == "gltf":
+            if args.metallic and args.roughness and args.smdi_basecolor:
+                result["tga"]["_smdi"] = conversion.convert_smdi_gltf(
+                    args.metallic, args.roughness, args.smdi_basecolor,
+                    out("_smdi"), args.spec, args.gloss, smdi_res)
+            else:
+                result["errors"].append("_smdi (gltf): needs metallic + roughness "
+                                        "+ base colour.")
+        elif smdi_mode == "pbr":
             if args.metallic and args.roughness and args.smdi_basecolor:
                 result["tga"]["_smdi"] = conversion.convert_smdi_pbr(
                     args.metallic, args.roughness, args.smdi_basecolor,
@@ -112,6 +122,20 @@ def run(args):
                 args.emissive, out("_em"), _res(args.em_res, args.resolution))
         except Exception as e:
             result["errors"].append(f"_em: {e}")
+
+    if args.mc:
+        try:
+            paths = args.mc if isinstance(args.mc, list) else [args.mc]
+            mc_res = _res(args.mc_res, args.resolution)
+            mc_alpha = args.mc_alpha or None
+            if len(paths) == 1:
+                result["tga"]["_mc"] = conversion.convert_mc_texture(
+                    paths[0], out("_mc"), mc_res, mc_alpha)
+            else:
+                result["tga"]["_mc"] = conversion.convert_mc_combined(
+                    paths, out("_mc"), args.mc_blend, mc_res, mc_alpha)
+        except Exception as e:
+            result["errors"].append(f"_mc: {e}")
 
     # optional TGA -> PAA (TGA kept for previewing)
     make_paa = args.paa or args.rvmat
@@ -218,12 +242,30 @@ def run_estimate_material(args):
     import numpy as np
     from PIL import Image
     res = {"specular_power": None, "emmisive": None, "has_emissive": False,
-           "avg_roughness": None, "avg_color": None, "errors": []}
+           "avg_roughness": None, "avg_color": None, "specular_tint": None,
+           "metal_fraction": None, "errors": []}
     try:
         if args.basecolor:
             base = np.asarray(Image.open(args.basecolor).convert("RGB"), np.float32) / 255.0
             lin = conversion._srgb_to_linear(base)
             res["avg_color"] = [round(float(lin[..., c].mean()), 3) for c in range(3)] + [1.0]
+            # DayZ specular[] tint from the metal reflectance (glTF F0 = mix(0.04,
+            # baseColor, metallic)), averaged over the metallic pixels. sRGB space
+            # so it lands like the metal presets (copper 0.95,0.64,0.54).
+            if args.metallic:
+                metal = np.asarray(Image.open(args.metallic).convert("L"),
+                                   np.float32)[..., None] / 255.0
+                f0 = base * metal + (1.0 - metal) * conversion.DIELECTRIC_F0
+                w = metal[..., 0]
+                res["metal_fraction"] = round(float((w > 0.5).mean()), 4)
+                wsum = float(w.sum())
+                if wsum > 1e-3:
+                    tint = [round(float((f0[..., c] * w).sum() / wsum), 3)
+                            for c in range(3)]
+                    res["specular_tint"] = tint + [1.0]
+                else:
+                    # no metal -> keep the neutral white specular
+                    res["specular_tint"] = [1.0, 1.0, 1.0, 1.0]
         if args.roughness:
             rough = np.asarray(Image.open(args.roughness).convert("L"), np.float32) / 255.0
             gloss = 1.0 - float(rough.mean())
@@ -258,14 +300,14 @@ def build_parser():
     p.add_argument("--gloss-map", dest="gloss_map",
                    help="Painter Glossiness map for _smdi blue (spec/gloss mode).")
     p.add_argument("--smdi-mode", dest="smdi_mode", default="auto",
-                   choices=["auto", "specgloss", "metrough", "pbr"],
+                   choices=["auto", "specgloss", "metrough", "pbr", "gltf"],
                    help="How to build _smdi. auto = infer from the maps given.")
     p.add_argument("--smdi-basecolor", dest="smdi_basecolor",
                    help="Raw base colour for the 'pbr' _smdi method (metal F0).")
     p.add_argument("--output")
     p.add_argument("--prefix")
     p.add_argument("--co-mode", default="base_color",
-                   choices=["base_color", "base_color_specular"])
+                   choices=["base_color", "base_color_specular", "specgloss"])
     p.add_argument("--normal-format", default="opengl", choices=["opengl", "directx"])
     p.add_argument("--invert-ao", action="store_true")
     p.add_argument("--spec", type=float, default=1.0)
@@ -293,6 +335,15 @@ def build_parser():
     p.add_argument("--co-alpha", dest="co_alpha", action="store_true",
                    help="Export the colour map as _ca (colour + alpha) instead of _co.")
     p.add_argument("--co-opacity", dest="co_opacity", help="Opacity channel -> _ca alpha.")
+    p.add_argument("--mc", nargs="+",
+                   help="User-channel source(s) for the _mc (macro) map. Multiple "
+                        "paths are blended together with --mc-blend.")
+    p.add_argument("--mc-blend", dest="mc_blend", default="lighten",
+                   help="Blend mode when combining User channels for _mc.")
+    p.add_argument("--mc-alpha", dest="mc_alpha",
+                   help="_mc blend mask: 'auto' (from the macro luminance) or a path "
+                        "to a grayscale mask. Omit for an opaque (RGB) _mc.")
+    p.add_argument("--mc-res", dest="mc_res", type=int)
     return p
 
 
