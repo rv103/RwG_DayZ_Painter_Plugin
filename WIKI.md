@@ -579,8 +579,8 @@ the mask is taken from the macro's own brightness (`max(R, G, B)` per pixel). So
    - **alpha:** **Auto (macro)**
    - **size:** for a couple of small marks, **512** is plenty (see the note).
    Export.
-5. **Wire it into the rvmat.** RVMAT tab → the **MC** stage → **Use textures
-   inside** (or browse to `<prefix>_mc`). Write the `.rvmat`.
+5. **Wire it into the rvmat.** RVMAT tab → the **MC** stage → **Auto-fill from
+   export** (or browse to `<prefix>_mc`). Write the `.rvmat`.
 6. **Check in-game / Buldozer.** The rivets show brass; the rest of the knife is
    untouched.
 

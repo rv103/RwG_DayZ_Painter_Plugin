@@ -1199,7 +1199,7 @@ class RwGDock(QtWidgets.QWidget):
         layout.addLayout(srow)
 
         hint("SMDI tuning: G scales specular, B scales gloss (1.00 = unchanged).   "
-             "Per-map details &amp; recommendations are in the  ?  help.")
+             "Per-map details and recommendations are in the  ?  help.")
 
         # --- paa + export ---
         header("Export  (.tga is always written; .paa optional)")
