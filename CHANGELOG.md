@@ -32,6 +32,17 @@ layout.
   matching rwg-addon.com) on headers, cards, active tab, checked boxes, focus and
   sliders; card titles are larger and bold.
 
+### Fixes
+
+- **`_dtsmdi` no longer drags a `_smdi` along.** Exporting with only `_co` /
+  `_nohq` / `_dtsmdi` ticked used to also write a `_smdi`, because `_dtsmdi`
+  supplies the same metallic/roughness inputs the CLI would infer a `_smdi` from.
+  The `_smdi` is now built only when its own checkbox is ticked.
+- **Optional RVMAT auto-fill.** New checkbox **"Enter exported textures into the
+  RVMAT (NOHQ / AS / SMDI / MC)"** in the Export card (on by default). Turn it off
+  to export the maps only and leave the RVMAT fields untouched; the **Auto-fill
+  from export** button still works on demand.
+
 ## v0.4.2 — Preview (2026-08-20)
 
 A small clarity + defaults release for the map export, based on how the DayZ

@@ -272,6 +272,7 @@ def load_settings():
         "em_on": False, "co_alpha": False, "mc_on": False, "mc_source": "User0",
         "mc_blend": "Lighten", "mc_alpha": "Auto (macro)",
         "dtsmdi_on": False,
+        "autofill_on_export": True,
         "co_res": "2048", "nohq_res": "2048", "smdi_res": "2048", "as_res": "1024",
         "em_res": "1024", "mc_res": "2048", "dtsmdi_res": "2048",
         "co_source": "base_color",
@@ -1218,6 +1219,22 @@ class RwGDock(QtWidgets.QWidget):
         folder_btn.clicked.connect(self.on_convert_folder_paa)
         layout.addWidget(folder_btn)
 
+        # After an export, optionally write the produced texture paths into the
+        # RVMAT NOHQ/AS/SMDI/MC fields. Off => export textures only, leave the
+        # rvmat untouched (you can still fill it later with "Auto-fill from
+        # export" on the RVMAT tab).
+        self.autofill_cb = QtWidgets.QCheckBox(
+            "Enter exported textures into the RVMAT (NOHQ / AS / SMDI / MC)")
+        self.autofill_cb.setChecked(self.s.get("autofill_on_export", True))
+        self.autofill_cb.setToolTip(
+            "On  - after an export, fill the RVMAT texture paths with what was\n"
+            "      just exported (the old behaviour).\n"
+            "Off - export the textures only and leave the RVMAT fields alone;\n"
+            "      use this when you just want the maps, not an rvmat update.\n"
+            "The 'Auto-fill from export' button on the RVMAT tab always works\n"
+            "regardless of this checkbox.")
+        layout.addWidget(self.autofill_cb)
+
         # --- RVMAT tab ---
         end_page()
         page_layout = rvmat_layout
@@ -1788,6 +1805,7 @@ class RwGDock(QtWidgets.QWidget):
             "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
             "dtsmdi_on": self.dtsmdi_cb.isChecked(),
             "dtsmdi_res": self.dtsmdi_res.currentText(),
+            "autofill_on_export": self.autofill_cb.isChecked(),
             "mc_blend": self.mc_blend.currentText(),
             "mc_alpha": self.mc_alpha.currentText(),
             "co_res": self.co_res.currentText(), "nohq_res": self.nohq_res.currentText(),
@@ -2558,6 +2576,7 @@ class RwGDock(QtWidgets.QWidget):
             if s["nohq_on"] and maps.get("normal"):
                 args += ["--normal", maps["normal"], "--nohq-res", s["nohq_res"]]
             if s["smdi_on"]:
+                args += ["--smdi"]          # explicitly request the _smdi map
                 if s["smdi_source"] == "specgloss" and maps.get("specular") and maps.get("glossiness"):
                     args += ["--smdi-mode", "specgloss",
                              "--spec-map", maps["specular"], "--gloss-map", maps["glossiness"],
@@ -2661,7 +2680,8 @@ class RwGDock(QtWidgets.QWidget):
                         except Exception as e:
                             splog.warning(f"[RwG] .paa {os.path.basename(p)}: {e}")
 
-            self._autofill_rvmat_from_files(paa_files + paths, s)
+            if s.get("autofill_on_export", True):
+                self._autofill_rvmat_from_files(paa_files + paths, s)
             msg = f"Preset '{s['painter_preset']}' exported {len(paths)} map(s)"
             if paa_files:
                 msg += f", {len(paa_files)} .paa"
@@ -2730,7 +2750,8 @@ class RwGDock(QtWidgets.QWidget):
         if summary.get("errors"):
             msg += f"  ({len(summary['errors'])} issue(s) - see Log)"
         self.status.setText(msg)
-        self._autofill_rvmat(summary, s)
+        if s.get("autofill_on_export", True):
+            self._autofill_rvmat(summary, s)
 
     def _autofill_rvmat(self, summary, s):
         """Fill the rvmat texture fields from the produced maps (mod-relative,

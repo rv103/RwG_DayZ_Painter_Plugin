@@ -63,8 +63,16 @@ def run(args):
 
     smdi_mode = args.smdi_mode
     smdi_res = _res(args.smdi_res, args.resolution)
+    # Only build the _smdi when it is actually requested. The plugin passes
+    # --smdi when the _smdi map is ticked; standalone callers that give an
+    # explicit --smdi-mode (anything but the "auto" default) also opt in. This
+    # stops a _smdi being produced as a side effect of --dtsmdi, which supplies
+    # the same metallic/roughness inputs.
+    want_smdi = args.smdi or smdi_mode != "auto"
     try:
-        if smdi_mode == "gltf":
+        if not want_smdi:
+            pass
+        elif smdi_mode == "gltf":
             if args.metallic and args.roughness and args.smdi_basecolor:
                 result["tga"]["_smdi"] = conversion.convert_smdi_gltf(
                     args.metallic, args.roughness, args.smdi_basecolor,
@@ -313,6 +321,9 @@ def build_parser():
                    help="Painter Specular map for _smdi green (spec/gloss mode).")
     p.add_argument("--gloss-map", dest="gloss_map",
                    help="Painter Glossiness map for _smdi blue (spec/gloss mode).")
+    p.add_argument("--smdi", action="store_true",
+                   help="Build the _smdi map. Required to produce it; without it "
+                        "the _smdi inputs may still be present for --dtsmdi only.")
     p.add_argument("--smdi-mode", dest="smdi_mode", default="auto",
                    choices=["auto", "specgloss", "metrough", "pbr", "gltf"],
                    help="How to build _smdi. auto = infer from the maps given.")
