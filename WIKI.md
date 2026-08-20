@@ -51,12 +51,14 @@ Most artists paint in the **metal/rough** model: a `baseColor`, a `metallic`
 mask, and a `roughness` map. DayZ's **Enfusion "Super" shader** does **not** use
 that model. It uses **specular / glossiness**:
 
-- **Colour comes from two places, not one.** For a *dielectric* (plastic, wood,
-  cloth, paint) the colour lives in the **`_co`** (albedo). For a *metal*, the
-  colour lives in the **material's `specular[]` tint** in the `.rvmat` — and the
-  `_co` for a metal is basically **black**.
-- **`_smdi` is grayscale.** It stores a specular *level* (how reflective, `G`)
-  and a *gloss* (`B = 1 − roughness`). It does **not** store the metal's colour.
+- **Colour lives in the `_co`.** The `_co` (albedo) carries the surface colour —
+  for dielectrics *and*, by default, for metals. DayZ's `_co` is "colour only, no
+  reflection info", so as long as the `_smdi` is right you can simply let a metal
+  keep its colour in the `_co`. *(This is v0.4.2's default; the classic
+  "metals-black" route is still supported — see the note below.)*
+- **`_smdi` is grayscale.** It stores a specular *level* (how reflective, `G`) and
+  a *gloss* (`B = 1 − roughness`). It decides how *shiny* the surface is, **not**
+  what *colour* it is.
 - **`fresnel(N,K)`** shapes how reflectance rises toward grazing angles.
 - **`env`** (Stage7) is the reflection cubemap — without it, metal looks flat.
 
@@ -65,16 +67,21 @@ the maps:
 
 | Metal/rough input | Goes to |
 |---|---|
-| baseColor (dielectric part) | `_co` |
-| baseColor (metal part) | `.rvmat` `specular[]` tint (via the specular estimate / material library) |
+| baseColor (colour — dielectric *and* metal) | `_co` |
 | metallic + roughness + baseColor | `_smdi` (G = specular level, B = gloss) |
 | normal + height | `_nohq` |
 | AO | `_as` |
 | emissive | `_em`, `emmisive[]` |
 
-> **Tip:** If a metal comes out grey/colourless in-game, you forgot the second
-> half: set the **`specular[]` tint** (and an **env** map). The `_smdi` only made
-> it *shiny*, not *coloured*.
+> **Tip — the classic alternative.** BI's older Super-shader approach keeps a metal
+> **black** in the `_co` and puts its colour in the rvmat **`specular[]` tint**
+> instead. Both work; the plugin still supports it — pick the *Diffuse (metals
+> black)* or *Spec/Gloss diffuse* `_co` source and set the specular tint (the
+> estimate / material library). v0.4.2 just defaults to the simpler "colour stays
+> in the `_co`" route.
+
+> **Tip:** If a metal looks flat/greyish in-game, it's usually the **`_smdi`
+> specular level** or a missing **env** map — not the colour. Check those first.
 
 The dielectric reflectance constant used everywhere is **F0 = 0.04** (4 %), the
 standard non-metal reflectance.
@@ -152,23 +159,25 @@ controlled.
 
 | Source | What it does | Use it when |
 |---|---|---|
-| **Diffuse (recommended)** | Painter's *converted* Diffuse — the metal/rough→diffuse the engine expects; metals go black. | The default for almost everything. |
-| **2D View** | The flattened 2D viewport, exactly as shown. | You want the painted look incl. effects that don't map to a channel, and don't care about correct metal handling. |
-| **Base Color** | The raw albedo channel, untouched — metals keep their colour. | Stylised looks, or a model that does **not** use the metal-in-specular workflow. |
+| **Base Color — metals keep color (recommended)** | The raw albedo channel, untouched — metals keep their colour, so the DayZ colour map carries the metal colour. | **The default.** The simplest route: colour in `_co`, reflectivity in `_smdi`. |
+| **Diffuse (metals black)** | Painter's *converted* Diffuse — the classic metal/rough→diffuse; metals go black and their colour must come from the rvmat specular tint. | The classic BI approach, or when you deliberately want metals black in `_co`. |
+| **2D View** | The flattened 2D viewport, exactly as shown. | You want the painted look incl. effects that don't map to a channel. |
 | **Base Color + Specular** | Albedo dimmed by the specular reflectance peak: `diffuse = base × (1 − specLevel)`. | You want the diffuse to lose exactly the energy that becomes specular (energy-ish conservation). |
-| **Spec/Gloss diffuse (glTF)** | The canonical spec/gloss diffuse: `base × (1 − 0.04) × (1 − metallic)`. Metals fully black, dielectrics keep 96 %. | The most physically-correct DayZ diffuse; great companion to the glTF/PBR `_smdi`. |
+| **Spec/Gloss diffuse (glTF)** | The canonical spec/gloss diffuse: `base × (1 − 0.04) × (1 − metallic)`. Metals fully black, dielectrics keep 96 %. | A physically-correct "metals-black" diffuse; companion to the glTF/PBR `_smdi`. |
 
 Tick **alpha (`_ca`)** to add an **Opacity** alpha and write the file as `_ca`
 instead of `_co` — for transparent materials (glass, foliage, decals).
 
-> **Tip — which to pick:** For real metal/rough assets use **Diffuse** or
-> **Spec/Gloss diffuse (glTF)** (metals black, colour comes from the rvmat
-> specular tint). Only use **Base Color** if you deliberately want metal colour
-> baked into `_co`. **2D View** is a fallback when you rely on 2D-only effects.
+> **Tip — which to pick:** Default to **Base Color** — metals keep their colour in
+> the `_co` and the `_smdi` handles the shine. Switch to **Diffuse (metals black)**
+> or **Spec/Gloss diffuse (glTF)** only if you want the classic black-metal `_co`
+> with the colour in the rvmat specular tint. **2D View** is a fallback when you
+> rely on 2D-only effects.
 
-> **Tip — metals look wrong in `_co`:** That's expected — DayZ metals are black
-> in `_co`. Their colour is the rvmat `specular[]`. Don't "fix" `_co`; set the
-> specular tint instead (see the material colours / N/K library sections).
+> **Tip — metals in `_co`:** With the default **Base Color**, metals *keep* their
+> colour in `_co` — that's intended, not a bug. If you instead pick a "metals-
+> black" source and a metal then looks grey in-game, its colour has to come from
+> the rvmat `specular[]` (see the material colours / N/K library sections).
 
 ---
 
@@ -181,16 +190,17 @@ comes from — `B` is always `(1 − roughness) × B_slider`.
 
 | Method | Green (specular level) formula | Character | Use it when |
 |---|---|---|---|
+| **Met→Spec/Gloss (glTF) — recommended** | `G = perceivedBrightness(mix(0.04, baseColor, metallic))` | The canonical glTF metric (sqrt-weighted brightness): each metal takes its **own** reflectance from its base-colour brightness — dull/oxidised stays darker than polished. | **The default** — accurate, varied metals straight from a metal/rough project. |
 | **Spec+Gloss (convert maps)** | `G = luminance(Painter's converted Specular)` | Respects a hand-authored specular; works even in a metal/rough project (Painter converts internally). | You painted a specular/gloss set, or want Painter's own conversion. |
 | **Met+Rough (channels)** | `G = 0.04 + 0.96 × metallic` | Punchy: every metal jumps to a flat, near-full specular; dielectrics sit at 0.04. Ignores each metal's own reflectance. | You want a strong, uniform metallic look, or the base colour isn't reliable. |
-| **Met+Rough+BaseColor (PBR)** | `G = lerp(0.04, luminance_linear(baseColor), metallic)` | Physically based: each metal takes its **own** reflectance from its base-colour brightness — dull/oxidised metal stays darker than polished. | Accurate, varied metals (the recommended physically-based choice). |
-| **Met→Spec/Gloss (glTF)** | `G = perceivedBrightness(mix(0.04, baseColor, metallic))` | The canonical glTF metric (sqrt-weighted brightness). Practically identical to PBR, just the exact standard weighting. | You want the by-the-book glTF conversion. |
+| **Met+Rough+BaseColor (PBR)** | `G = lerp(0.04, luminance_linear(baseColor), metallic)` | Physically based; practically identical to glTF, just plain linear luminance instead of the glTF weighting. | An alternative reflectance-accurate method. |
 
 `perceivedBrightness(c) = sqrt(0.299 R² + 0.587 G² + 0.114 B²)`.
 
-> **Tip — which to pick:** Default to **PBR** (or **glTF**) for realistic metals;
-> use **Met+Rough** when you want every metal maximally shiny regardless of its
-> colour; use **Spec+Gloss** when you have a real specular/gloss set to honour.
+> **Tip — which to pick:** Default to **glTF** (or the near-identical **PBR**) for
+> realistic metals; use **Met+Rough** when you want every metal maximally shiny
+> regardless of its colour; use **Spec+Gloss** when you have a real specular/gloss
+> set to honour.
 
 > **Tip — gloss (B):** `B = 1 − roughness`. A fresh brass casing is smooth →
 > gloss ≈ **0.7–0.85**; worn/blasted metal → lower. Use the **B slider** to nudge
@@ -453,8 +463,9 @@ back. **Save the Painter project** to persist the metadata to disk.
 ### A metal material (brass, copper, steel…)
 
 1. Paint metal/rough as usual.
-2. **Maps** → `_co` source **Diffuse** (or **Spec/Gloss glTF**); `_smdi` source
-   **Met+Rough+BaseColor (PBR)** (or **glTF**). Export.
+2. **Maps** → `_co` source **Base Color** (metals keep colour — the default), or
+   **Diffuse (metals black)** for the classic route; `_smdi` source
+   **Met→Spec/Gloss (glTF)** (the default). Export.
 3. **RVMAT** → pick the metal in **Preset → Load** *or* **material N/K → Apply**;
    then the **specular estimate** droplet to pull the exact tint from your art.
 4. Set an **env** map; **Use textures inside**; **Write .rvmat**.
@@ -643,18 +654,18 @@ transparent and only your marks show. See the `_mc` walkthrough.
 
 | Method | G (specular level) | Best for |
 |---|---|---|
+| glTF *(default)* | `perceivedBrightness(mix(0.04, base, metallic))` | Accurate varied metals (canonical glTF) |
 | Spec+Gloss | `luminance(Painter specular)` | Hand-authored spec/gloss |
 | Met+Rough | `0.04 + 0.96·metallic` | Strong, uniform metals |
-| PBR | `lerp(0.04, luminance_lin(base), metallic)` | Accurate varied metals |
-| glTF | `perceivedBrightness(mix(0.04, base, metallic))` | Canonical glTF |
+| PBR | `lerp(0.04, luminance_lin(base), metallic)` | Alternative accurate metals |
 
 ### `_co` sources at a glance
 
 | Source | Metals | Dielectrics |
 |---|---|---|
-| Diffuse | black | painted colour |
+| Base Color *(default)* | keep colour | keep colour |
+| Diffuse (metals black) | black | painted colour |
 | 2D View | as shown | as shown |
-| Base Color | keep colour | keep colour |
 | Base Color + Specular | dimmed by spec | slightly dimmed |
 | Spec/Gloss glTF | black | ×0.96 |
 
@@ -674,8 +685,16 @@ transparent and only your marks show. See the `_mc` walkthrough.
 
 ## Changelog
 
-Latest release (everything since the previous upload, **v0.3.0 → v0.4.0**); full
-history in `CHANGELOG.md`.
+Latest releases; full history in `CHANGELOG.md`.
+
+### v0.4.2 — Preview (2026-08-20)
+
+Clarity + defaults for the map export. The `_co` and `_smdi` source dropdowns now
+spell out what each option does, and ship with sensible defaults: `_co` →
+**Base Color (metals keep color)** so the colour map carries the metal colour, and
+`_smdi` → **Met→Spec/Gloss (glTF)**. The recommended option now sits at the top of
+each dropdown, marked *(recommended)*. Internal source keys are unchanged, so
+existing projects keep their saved choice.
 
 ### v0.4.0 — Preview (2026-08-15)
 
