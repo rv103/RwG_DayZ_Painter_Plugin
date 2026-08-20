@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.2 — Preview (2026-08-20)
+
+A small clarity + defaults release for the map export, based on how the DayZ
+Super shader actually works (colour lives in the `_co`, the `_smdi` drives the
+specular).
+
+### Export
+
+- **Clearer method names.** The `_co` and `_smdi` source dropdowns now spell out
+  what each option does — for `_co` whether metals **keep their colour** or **go
+  black**, for `_smdi` how the specular level is derived (flat metal spec /
+  per-metal spec / glTF).
+- **New sensible defaults.** `_co` defaults to **Base Color (metals keep color)**
+  so the DayZ colour map carries the metal colour, and `_smdi` to
+  **Met→Spec/Gloss (glTF)** — per-metal reflectance from
+  `mix(0.04, baseColor, metallic)`.
+- The recommended default now sits at the **top of each dropdown**, marked
+  **(recommended)**; tooltips updated to match.
+
+Internal source keys are unchanged, so existing projects keep their saved choice.
+
 ## v0.4.0 — Preview (2026-08-15)
 
 A conversion-accuracy + workflow release, focused on the metal/rough → DayZ

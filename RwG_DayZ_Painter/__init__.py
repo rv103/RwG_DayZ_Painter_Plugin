@@ -48,7 +48,7 @@ from .core import rvmat_writer, paa_tools
 
 
 PLUGIN_TITLE = "RwG DayZ Texture Exporter"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.4.2"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(PLUGIN_DIR, "rwg_dayz_settings.json")
 # user-defined RVMAT material presets (global, shared across all projects)
@@ -227,8 +227,8 @@ def load_settings():
         "mc_blend": "Lighten", "mc_alpha": "Auto (macro)",
         "co_res": "2048", "nohq_res": "2048", "smdi_res": "2048", "as_res": "1024",
         "em_res": "1024", "mc_res": "2048",
-        "co_source": "diffuse",
-        "smdi_source": "specgloss",
+        "co_source": "base_color",
+        "smdi_source": "gltf",
         "smdi_green": 1.0, "smdi_blue": 1.0,
         "preset": "Default", "mateditor": "", "texview": "", "autosync": True,
         "mode": "builtin", "painter_preset": "DayZ", "preset_shelf": "your_assets",
@@ -989,22 +989,25 @@ class RwGDock(QtWidgets.QWidget):
         self.co_cb = QtWidgets.QCheckBox("_co")
         self.co_cb.setChecked(self.s.get("co_on", True))
         self.co_source = QtWidgets.QComboBox()
-        self.co_source.addItems(["Diffuse (recommended)", "2D View", "Base Color",
-                                 "Base Color + Specular", "Spec/Gloss diffuse (glTF)"])
+        self.co_source.addItems(["Base Color - metals keep color (recommended)",
+                                 "Diffuse (metals black)", "2D View", "Base Color + Specular",
+                                 "Spec/Gloss diffuse, glTF (metals black)"])
         self.co_source.setToolTip(
-            "Diffuse - proper DayZ diffuse (metal/rough converted; metals go black).\n"
-            "2D View - the flattened 2D viewport.\n"
-            "Base Color - the raw albedo channel.\n"
-            "Base Color + Specular - albedo dimmed by specular.\n"
-            "Spec/Gloss diffuse (glTF) - canonical baseColor*(1-0.04)*(1-metallic): "
+            "How the _co is built. Key question: does the metal colour stay in the _co,\n"
+            "or go black (then the metal look rides on specular[] + fresnel + env)?\n"
+            "  Diffuse - Painter's metal/rough diffuse: metals go BLACK.\n"
+            "  2D View - the flattened 2D viewport.\n"
+            "  Base Color - raw albedo: metals KEEP their colour (recommended).\n"
+            "  Base Color + Specular - albedo dimmed by specular; metals keep colour.\n"
+            "  Spec/Gloss diffuse (glTF) - canonical baseColor*(1-0.04)*(1-metallic): "
             "metals black, dielectrics keep 96%.")
-        self.co_source.setCurrentText({"diffuse": "Diffuse (recommended)",
+        self.co_source.setCurrentText({"diffuse": "Diffuse (metals black)",
                                        "2d_view": "2D View",
-                                       "base_color": "Base Color",
+                                       "base_color": "Base Color - metals keep color (recommended)",
                                        "base_color_specular": "Base Color + Specular",
-                                       "specgloss": "Spec/Gloss diffuse (glTF)"}.get(
-                                           self.s.get("co_source", "diffuse"),
-                                           "Diffuse (recommended)"))
+                                       "specgloss": "Spec/Gloss diffuse, glTF (metals black)"}.get(
+                                           self.s.get("co_source", "base_color"),
+                                           "Base Color - metals keep color (recommended)"))
         # alpha toggle: off = _co, on = _ca (same source, plus an Opacity alpha)
         self.co_alpha_cb = QtWidgets.QCheckBox("alpha (_ca)")
         self.co_alpha_cb.setChecked(self.s.get("co_alpha", False))
@@ -1033,23 +1036,24 @@ class RwGDock(QtWidgets.QWidget):
         self.smdi_cb = QtWidgets.QCheckBox("_smdi")
         self.smdi_cb.setChecked(self.s.get("smdi_on", True))
         self.smdi_source = QtWidgets.QComboBox()
-        self.smdi_source.addItems(["Spec+Gloss (convert maps)", "Met+Rough (channels)",
-                                   "Met+Rough+BaseColor (PBR)", "Met->Spec/Gloss (glTF)"])
+        self.smdi_source.addItems(["Met->Spec/Gloss, glTF (recommended)",
+                                   "Spec+Gloss (converted maps)", "Met+Rough (flat metal spec)",
+                                   "Met+Rough+BaseColor, PBR (per-metal spec)"])
         self.smdi_source.setCurrentText(
-            {"metrough": "Met+Rough (channels)",
-             "pbr": "Met+Rough+BaseColor (PBR)",
-             "gltf": "Met->Spec/Gloss (glTF)"}.get(
-                self.s.get("smdi_source"), "Spec+Gloss (convert maps)"))
+            {"metrough": "Met+Rough (flat metal spec)",
+             "pbr": "Met+Rough+BaseColor, PBR (per-metal spec)",
+             "gltf": "Met->Spec/Gloss, glTF (recommended)"}.get(
+                self.s.get("smdi_source"), "Spec+Gloss (converted maps)"))
         self.smdi_source.setToolTip(
-            "How the _smdi is built:\n"
-            "  Spec+Gloss (convert maps) - Painter's converted Specular + Glossiness. "
+            "How the _smdi (specular level + gloss) is built:\n"
+            "  Spec+Gloss (converted maps) - Painter's converted Specular + Glossiness. "
             "Works in a Metallic/Roughness project too (Painter converts them).\n"
-            "  Met+Rough (channels) - built straight from your metallic + roughness "
-            "channels; metals go to a flat full specular.\n"
-            "  Met+Rough+BaseColor (PBR) - physically-based: each metal gets its own "
-            "reflectance from the base-colour luminance (dull metal stays darker than "
+            "  Met+Rough (flat metal spec) - built straight from your metallic + roughness "
+            "channels; every metal goes to a flat full specular.\n"
+            "  Met+Rough+BaseColor, PBR (per-metal spec) - physically-based: each metal gets "
+            "its own reflectance from the base-colour luminance (dull metal stays darker than "
             "polished). Dielectrics keep the 0.04 floor.\n"
-            "  Met->Spec/Gloss (glTF) - the canonical glTF conversion: G = perceived "
+            "  Met->Spec/Gloss (glTF), recommended - the canonical glTF conversion: G = perceived "
             "brightness of mix(0.04, baseColor, metallic). Like PBR, canonical metric.")
         self.smdi_res = self._res_combo("smdi_res", "2048")
         grid.addWidget(self.smdi_cb, 3, 0)
@@ -1619,9 +1623,10 @@ class RwGDock(QtWidgets.QWidget):
 
     # ---------- state ----------
     def _collect(self):
-        src_map = {"Diffuse (recommended)": "diffuse", "2D View": "2d_view",
-                   "Base Color": "base_color", "Base Color + Specular": "base_color_specular",
-                   "Spec/Gloss diffuse (glTF)": "specgloss"}
+        src_map = {"Diffuse (metals black)": "diffuse", "2D View": "2d_view",
+                   "Base Color - metals keep color (recommended)": "base_color",
+                   "Base Color + Specular": "base_color_specular",
+                   "Spec/Gloss diffuse, glTF (metals black)": "specgloss"}
         # python / imagetopaa / mateditor live in the Settings dialog (self.s)
         self.s.update({
             "output": self.output_edit.text(),

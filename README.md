@@ -6,7 +6,7 @@ plus optional `.paa` conversion and a full **`.rvmat`** editor, all from a dock
 inside Painter. It even generates the **damage variants** (`_worn` / `_damage`
 / `_destruct` …) for you.
 
-> **Preview · v0.4.0** — feedback and edge cases welcome!
+> **Preview · v0.4.2** — feedback and edge cases welcome!
 
 ![RwG DayZ Texture Exporter](docs/preview.png)
 
@@ -92,11 +92,12 @@ line sits at the bottom.
 
 Each map has its own checkbox and resolution.
 
-- **`_co`** — from Painter's **Diffuse** (metal/rough converted; metals go
-  black). *2D View* / *Base Color* / *Base Color + Specular* / *Spec/Gloss
-  diffuse (glTF)* (`baseColor × 0.96 × (1 − metallic)`) are alternatives. Tick
-  **alpha (`_ca`)** to add an Opacity alpha and write it as `_ca` instead
-  (transparent materials).
+- **`_co`** — defaults to **Base Color** (raw albedo; **metals keep their
+  colour**, so the DayZ colour map carries the metal colour) — *recommended*.
+  Alternatives: *Diffuse* (metal/rough converted; metals go black), *2D View*,
+  *Base Color + Specular*, *Spec/Gloss diffuse (glTF)*
+  (`baseColor × 0.96 × (1 − metallic)`, metals black). Tick **alpha (`_ca`)** to
+  add an Opacity alpha and write it as `_ca` instead (transparent materials).
 - **`_nohq`** — **Normal DirectX** for DayZ (normal channel + height + baked
   mesh normal, never flat). OpenGL is switchable and remembered per project.
 - **`_smdi`** — `R = white, G = specular, B = gloss`, with a source dropdown:
@@ -106,9 +107,10 @@ Each map has its own checkbox and resolution.
   - **Met+Rough+BaseColor (PBR)** — physically based: each metal takes its own
     reflectance from the (linearised) base-colour luminance; dielectrics keep
     the `0.04` floor.
-  - **Met→Spec/Gloss (glTF)** — the canonical glTF metal/rough → spec/gloss
-    conversion: `G = perceivedBrightness(mix(0.04, baseColor, metallic))`. Like
-    PBR, but with glTF's exact sqrt-weighted brightness metric.
+  - **Met→Spec/Gloss (glTF)** — *recommended default.* The canonical glTF
+    metal/rough → spec/gloss conversion:
+    `G = perceivedBrightness(mix(0.04, baseColor, metallic))`. Like PBR, but with
+    glTF's exact sqrt-weighted brightness metric.
   - Two sliders scale the **G** (specular) and **B** (gloss) channels.
 - **`_as`** — DayZ layout (R/B white, G = mixed AO). 512 is usually plenty.
 - **`_em`** *(optional)* — emissive / glow, straight from the Emissive channel.
