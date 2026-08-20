@@ -48,7 +48,7 @@ from .core import rvmat_writer, paa_tools
 
 
 PLUGIN_TITLE = "RwG DayZ Texture Exporter"
-PLUGIN_VERSION = "0.4.2"
+PLUGIN_VERSION = "0.4.3"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(PLUGIN_DIR, "rwg_dayz_settings.json")
 # user-defined RVMAT material presets (global, shared across all projects)
@@ -116,9 +116,13 @@ _co and _ca are the same map - the <b>alpha (_ca)</b> tick decides which one is 
 
 <b>RVMAT</b>
 <ul>
-<li><b>Texture ext</b>: .paa or .tga for the texture paths written into the rvmat.</li>
-<li>NOHQ/AS/SMDI auto-fill after an export. <b>default</b> sets the procedural value;
-<b>Use textures inside</b> fills the real exported paths.</li>
+<li><b>Texture paths use</b>: .paa (packed, what the game loads) or .tga (raw, for
+preview) for the texture paths written into the rvmat.</li>
+<li>Each texture row has a small <b>availability light</b>: green = the referenced
+file is on disk, amber = only the other extension is there (convert it or switch the
+extension), red = nothing found, grey = procedural default. Hover it for details.</li>
+<li><b>Auto-fill from export</b> fills NOHQ/AS/SMDI with the real exported paths;
+<b>default</b> resets a row to its procedural value.</li>
 <li>Material values (ambient/diffuse/.../specularPower) are editable fields.
 <b>Load preset values</b> fills them from a preset; <b>Write .rvmat</b> saves everything.
 Small helpers (hover for tooltips): a <b>droplet</b> = sample the average base colour,
@@ -163,15 +167,49 @@ material references _nohq, _as and _smdi.</i></p>
 """
 
 DOCK_QSS = """
-QLabel#title { font-weight: bold; font-size: 14px; }
+QLabel#title { font-weight: bold; font-size: 15px; color: #ff5a62; }
 QLabel#sectionHeader {
     font-weight: bold;
-    font-size: 12px;
-    padding: 4px 0 2px 0;
-    border-bottom: 1px solid rgba(255,255,255,38);
-    margin-bottom: 1px;
+    font-size: 13px;
+    color: #ff5a62;
+    padding: 4px 0 3px 8px;
+    border-left: 3px solid #e4141f;
+    border-bottom: 1px solid rgba(228,20,31,90);
+    margin-bottom: 2px;
 }
 QLabel#hint { color: #9aa0a6; font-size: 10px; }
+QGroupBox#section {
+    border: 1px solid rgba(228,20,31,120);
+    border-radius: 6px;
+    margin-top: 17px;
+    padding: 8px 2px 4px 2px;
+    background: rgba(255,255,255,8);
+}
+QGroupBox#section::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 1px 6px;
+    color: #ff5a62;
+    font-weight: bold;
+    font-size: 14px;
+}
+QGroupBox#subsection {
+    border: 1px solid rgba(255,255,255,40);
+    border-radius: 5px;
+    margin-top: 14px;
+    padding: 6px 2px 2px 2px;
+    background: rgba(255,255,255,5);
+}
+QGroupBox#subsection::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 1px 5px;
+    color: #ff5a62;
+    font-weight: bold;
+    font-size: 12px;
+}
 QPushButton { padding: 3px 8px; border: 1px solid rgba(255,255,255,32); border-radius: 4px; }
 QPushButton:hover { border-color: rgba(255,255,255,80); }
 QPushButton#mini {
@@ -180,16 +218,24 @@ QPushButton#mini {
 }
 QPushButton#primary {
     font-weight: bold;
-    border: 1px solid #59946f;
-    background: rgba(89,148,111,70);
+    border: 1px solid #e4141f;
+    background: rgba(228,20,31,70);
 }
-QPushButton#primary:hover { background: rgba(89,148,111,120); }
+QPushButton#primary:hover { background: rgba(228,20,31,120); }
 QPushButton#help { border-radius: 13px; font-weight: bold; }
 QLineEdit, QComboBox, QDoubleSpinBox {
     padding: 3px 5px; border: 1px solid rgba(255,255,255,32); border-radius: 4px;
 }
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border: 1px solid #e4141f; }
 QPlainTextEdit, QTextEdit { border: 1px solid rgba(255,255,255,32); border-radius: 4px; }
+QPlainTextEdit:focus, QTextEdit:focus { border: 1px solid #e4141f; }
 QCheckBox { spacing: 6px; font-weight: bold; }
+QCheckBox::indicator {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,70); background: rgba(255,255,255,12);
+}
+QCheckBox::indicator:checked { background: #e4141f; border: 1px solid #ff5a62; }
+QCheckBox::indicator:checked:hover { background: #ff3b45; }
 QScrollArea { background: transparent; border: none; }
 QTabWidget::pane { border: 1px solid rgba(255,255,255,26); border-radius: 4px; }
 QTabBar::tab {
@@ -197,17 +243,17 @@ QTabBar::tab {
     border: 1px solid rgba(255,255,255,22); border-bottom: none;
     border-top-left-radius: 4px; border-top-right-radius: 4px;
 }
-QTabBar::tab:selected { background: rgba(89,148,111,90); font-weight: bold; }
+QTabBar::tab:selected { background: rgba(228,20,31,120); font-weight: bold; color: #ffeef0; }
 QTabBar::tab:!selected { color: #b7bcc0; }
 QSlider::groove:horizontal {
     height: 4px; background: rgba(255,255,255,38); border-radius: 2px;
 }
-QSlider::sub-page:horizontal { background: rgba(89,148,111,150); border-radius: 2px; }
+QSlider::sub-page:horizontal { background: rgba(228,20,31,150); border-radius: 2px; }
 QSlider::handle:horizontal {
     width: 12px; margin: -6px 0; border-radius: 7px;
-    background: #59946f; border: 1px solid #7bbf93;
+    background: #e4141f; border: 1px solid #ff5a62;
 }
-QSlider::handle:horizontal:hover { background: #6fae86; }
+QSlider::handle:horizontal:hover { background: #ff3b45; }
 QLabel#sliderVal { color: #cfd3d6; font-size: 11px; }
 """
 
@@ -225,8 +271,9 @@ def load_settings():
         "co_on": True, "nohq_on": True, "smdi_on": True, "as_on": True,
         "em_on": False, "co_alpha": False, "mc_on": False, "mc_source": "User0",
         "mc_blend": "Lighten", "mc_alpha": "Auto (macro)",
+        "dtsmdi_on": False,
         "co_res": "2048", "nohq_res": "2048", "smdi_res": "2048", "as_res": "1024",
-        "em_res": "1024", "mc_res": "2048",
+        "em_res": "1024", "mc_res": "2048", "dtsmdi_res": "2048",
         "co_source": "base_color",
         "smdi_source": "gltf",
         "smdi_green": 1.0, "smdi_blue": 1.0,
@@ -611,7 +658,8 @@ def maps_from_export_paths(paths):
     # order matters: check 'view2d' before generic tokens
     picks = [("view2d", "view2d"), ("diffuse", "diffuse"), ("basecolor", "basecolor"),
              ("glossiness", "glossiness"), ("specular", "specular"),
-             ("normal", "normal"), ("roughness", "roughness"), ("metallic", "metallic"),
+             ("normal", "normal"), ("height", "height"),
+             ("roughness", "roughness"), ("metallic", "metallic"),
              ("emissive", "emissive"), ("emmisive", "emissive"),
              ("opacity", "opacity"),
              ("user0", "user0"), ("user1", "user1"), ("user2", "user2"),
@@ -738,9 +786,9 @@ class FresnelCurve(QtWidgets.QWidget):
         fill.lineTo(gx + gw, gy + gh)
         fill.lineTo(gx, gy + gh)
         fill.closeSubpath()
-        qp.fillPath(fill, QtGui.QColor(89, 148, 111, 90))
+        qp.fillPath(fill, QtGui.QColor(228, 20, 31, 90))
 
-        pen = QtGui.QPen(QtGui.QColor(123, 191, 147))
+        pen = QtGui.QPen(QtGui.QColor(255, 90, 98))
         pen.setWidth(2)
         qp.setPen(pen)
         qp.drawPath(path)
@@ -912,16 +960,24 @@ class RwGDock(QtWidgets.QWidget):
             tabs.addTab(rvmat_page, "RVMAT")
 
         layout = setup_layout
+        page_layout = setup_layout
 
         def end_page():
             # separate the three tabs; in single-window mode keep sections flowing
             if not single:
-                layout.addStretch(1)
+                page_layout.addStretch(1)
 
         def header(txt):
-            lbl = QtWidgets.QLabel(txt)
-            lbl.setObjectName("sectionHeader")
-            layout.addWidget(lbl)
+            # each section is a bordered "card" (QGroupBox) with a green title;
+            # widgets added afterwards land inside it via the reassigned `layout`.
+            nonlocal layout
+            box = QtWidgets.QGroupBox(txt)
+            box.setObjectName("section")
+            inner = QtWidgets.QVBoxLayout(box)
+            inner.setContentsMargins(10, 8, 10, 8)
+            inner.setSpacing(3)
+            page_layout.addWidget(box)
+            layout = inner
 
         def hint(txt):
             lbl = QtWidgets.QLabel(txt)
@@ -931,6 +987,7 @@ class RwGDock(QtWidgets.QWidget):
             return lbl
 
         # --- Setup tab ---
+        header("Setup")
         self.output_edit = self._path_row(layout, "Output folder:", "output", is_dir=True)
 
         prow = QtWidgets.QHBoxLayout()
@@ -969,7 +1026,7 @@ class RwGDock(QtWidgets.QWidget):
 
         # --- Maps tab ---
         end_page()
-        layout = maps_layout
+        page_layout = maps_layout
         header("Maps  (built-in mode: tick = export, size per map)")
 
         grid = QtWidgets.QGridLayout()
@@ -1104,6 +1161,22 @@ class RwGDock(QtWidgets.QWidget):
                               "a:", self.mc_alpha), 6, 1)
         grid.addWidget(self.mc_res, 6, 2)
 
+        # _dtsmdi (Detail + SMDI) - off by default; for the Multimaterial shader.
+        # R = detail derived from the normal, G/B = same as _smdi (method + sliders).
+        self.dtsmdi_cb = QtWidgets.QCheckBox("_dtsmdi")
+        self.dtsmdi_cb.setChecked(self.s.get("dtsmdi_on", False))
+        self.dtsmdi_cb.setToolTip(
+            "Detail + SMDI map for the DayZ Multimaterial shader.\n"
+            "  R = a fine detail map from height + baked mesh + normal (avg ~0.5)\n"
+            "  G = specular level, B = gloss  - built exactly like the _smdi above\n"
+            "     (uses the same _smdi method + the G/B sliders).\n"
+            "Needs metallic + roughness (+ base colour for the glTF/PBR method);\n"
+            "the normal supplies the detail. Written as <prefix>_dtsmdi.")
+        self.dtsmdi_res = self._res_combo("dtsmdi_res", "2048")
+        grid.addWidget(self.dtsmdi_cb, 7, 0)
+        grid.addLayout(middle("(Multimaterial: R = detail, G/B like _smdi)"), 7, 1)
+        grid.addWidget(self.dtsmdi_res, 7, 2)
+
         layout.addLayout(grid)
 
         # --- SMDI tuning: G (specular) / B (gloss) sliders on their own row so
@@ -1147,19 +1220,30 @@ class RwGDock(QtWidgets.QWidget):
 
         # --- RVMAT tab ---
         end_page()
-        layout = rvmat_layout
+        page_layout = rvmat_layout
         header("RVMAT")
 
         rext = QtWidgets.QHBoxLayout()
-        rext.addWidget(QtWidgets.QLabel("Texture ext:"))
+        rext.addWidget(QtWidgets.QLabel("Texture paths use:"))
         self.tex_ext_combo = QtWidgets.QComboBox()
         self.tex_ext_combo.addItems([".paa", ".tga"])
         self.tex_ext_combo.setCurrentText("." + self.s.get("tex_ext", "paa"))
-        self.tex_ext_combo.setToolTip("Extension used for the texture paths written into the .rvmat.")
+        self.tex_ext_combo.setToolTip(
+            "Which file extension the .rvmat points its texture stages at.\n"
+            ".paa is the packed texture the game loads; .tga is the raw file,\n"
+            "handy while you preview and iterate.")
+        self.tex_ext_combo.currentTextChanged.connect(
+            lambda _=None: self._update_all_tex_lights())
         rext.addWidget(self.tex_ext_combo)
-        use_tex_btn = QtWidgets.QPushButton("Use textures inside")
-        use_tex_btn.setToolTip("Fill NOHQ/AS/SMDI with the exported texture paths "
-                               "(output + prefix, mod-relative, with the chosen extension).")
+        ext_hint = QtWidgets.QLabel(".paa = game  ·  .tga = preview")
+        ext_hint.setStyleSheet("color:#9aa0a6;")
+        rext.addWidget(ext_hint)
+        rext.addSpacing(12)
+        use_tex_btn = QtWidgets.QPushButton("Auto-fill from export")
+        use_tex_btn.setToolTip(
+            "Fill the NOHQ / AS / SMDI paths below with the textures this plugin\n"
+            "exports (output folder + prefix), stored mod-relative, using the\n"
+            "extension chosen on the left. Use it after an export.")
         use_tex_btn.clicked.connect(self.on_use_textures_inside)
         rext.addWidget(use_tex_btn)
         rext.addStretch(1)
@@ -1169,6 +1253,10 @@ class RwGDock(QtWidgets.QWidget):
         self.as_ref = self._tex_row(layout, "AS:", "AS")
         self.smdi_ref = self._tex_row(layout, "SMDI:", "SMDI")
         self.mc_ref = self._tex_row(layout, "MC:", "MC")
+        self._update_all_tex_lights()
+
+        # the material block (preset -> env) is its own separate card
+        header("Material")
 
         # one preset row: built-in presets + your saved presets in a single
         # grouped dropdown. Load applies the full material values; Save stores
@@ -1308,6 +1396,8 @@ class RwGDock(QtWidgets.QWidget):
         erow.addWidget(self.env_combo)
         layout.addLayout(erow)
 
+        header("Write")           # write / load / MatEditor buttons in their own card
+
         wrow = QtWidgets.QHBoxLayout()
         write_btn = QtWidgets.QPushButton("Write .rvmat")
         write_btn.setObjectName("primary")
@@ -1404,7 +1494,7 @@ class RwGDock(QtWidgets.QWidget):
             except Exception:
                 pass
 
-        layout.addStretch(1)              # end RVMAT tab
+        page_layout.addStretch(1)         # end RVMAT tab
 
         # status bar - always visible under the tabs
         self.status = QtWidgets.QLabel("Ready.")
@@ -1426,7 +1516,10 @@ class RwGDock(QtWidgets.QWidget):
         return edit
 
     def _tex_row(self, layout, label, key):
-        """A texture reference field + browse + open + a 'default' button."""
+        """A texture reference field + paa/tga availability light + browse + open
+        + a 'default' button."""
+        if not hasattr(self, "_tex_dots"):
+            self._tex_dots, self._tex_edits = {}, {}
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(4)
         lbl = QtWidgets.QLabel(label)
@@ -1434,6 +1527,15 @@ class RwGDock(QtWidgets.QWidget):
         row.addWidget(lbl)
         edit = QtWidgets.QLineEdit()
         row.addWidget(edit)
+        # paa/tga availability light: green = referenced file on disk, amber = only
+        # the other extension exists, red = nothing found, grey = procedural default.
+        dot = QtWidgets.QLabel()
+        dot.setFixedSize(12, 12)
+        dot.setStyleSheet("background:#5a5d63; border-radius:6px;")
+        row.addWidget(dot)
+        self._tex_dots[key] = dot
+        self._tex_edits[key] = edit
+        edit.textChanged.connect(lambda _=None, k=key: self._update_tex_light(k))
         browse = QtWidgets.QPushButton()
         browse.setObjectName("mini")
         browse.setIcon(self._icon("folder"))
@@ -1494,6 +1596,54 @@ class RwGDock(QtWidgets.QWidget):
         except Exception:
             rel = p
         edit.setText(rel)
+
+    def _abs_tex(self, ref):
+        """Resolve a texture reference (mod-relative or absolute) to an abs path."""
+        ref = (ref or "").strip()
+        has_drive = len(ref) >= 2 and ref[1] == ":"
+        drive = self.s.get("drive", "P:\\").strip() or "P:\\"
+        return ref if has_drive else paa_tools.abs_from_rel(ref, drive)
+
+    def _update_tex_light(self, key):
+        """Colour one row's availability light from what's actually on disk."""
+        dot = getattr(self, "_tex_dots", {}).get(key)
+        edit = getattr(self, "_tex_edits", {}).get(key)
+        if dot is None or edit is None:
+            return
+        GREY, GREEN, AMBER, RED = "#5a5d63", "#3fb56b", "#e0a92e", "#d05a5a"
+        ref = (edit.text() or "").strip()
+        if not ref or ref.startswith("#("):
+            color, tip = GREY, "Procedural default - no texture file to check."
+        else:
+            base, ext = os.path.splitext(ref)
+            ext = ext.lower()
+            try:
+                paa = os.path.exists(self._abs_tex(base + ".paa"))
+                tga = os.path.exists(self._abs_tex(base + ".tga"))
+            except Exception:
+                paa = tga = False
+            want = ext if ext in (".paa", ".tga") else ".paa"
+            have_want = paa if want == ".paa" else tga
+            detail = ("  .paa " + ("\u2713" if paa else "\u2717")
+                      + "    .tga " + ("\u2713" if tga else "\u2717"))
+            if have_want:
+                color = GREEN
+                tip = "Ready - the referenced " + want + " is on disk.\n" + detail
+            elif paa or tga:
+                other = ".tga" if want == ".paa" else ".paa"
+                color = AMBER
+                tip = ("Referenced " + want + " is missing, but " + other + " exists.\n"
+                       "Run 'Convert .tga \u2192 .paa' or switch the extension.\n" + detail)
+            else:
+                color = RED
+                tip = "No texture file found at this path.\n" + detail
+        dot.setStyleSheet("background:" + color + "; border-radius:6px;")
+        dot.setToolTip(tip)
+
+    def _update_all_tex_lights(self):
+        """Refresh every texture row's availability light."""
+        for k in list(getattr(self, "_tex_dots", {})):
+            self._update_tex_light(k)
 
     def _val_row(self, layout, label, key, default, buttons=None, color_title=None):
         """An editable material-value field (e.g. ambient = 1,1,1,1).
@@ -1636,6 +1786,8 @@ class RwGDock(QtWidgets.QWidget):
             "smdi_on": self.smdi_cb.isChecked(), "as_on": self.as_cb.isChecked(),
             "em_on": self.em_cb.isChecked(), "co_alpha": self.co_alpha_cb.isChecked(),
             "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
+            "dtsmdi_on": self.dtsmdi_cb.isChecked(),
+            "dtsmdi_res": self.dtsmdi_res.currentText(),
             "mc_blend": self.mc_blend.currentText(),
             "mc_alpha": self.mc_alpha.currentText(),
             "co_res": self.co_res.currentText(), "nohq_res": self.nohq_res.currentText(),
@@ -2200,6 +2352,22 @@ class RwGDock(QtWidgets.QWidget):
     def on_normal_changed(self, fmt):
         set_project_normal_format(fmt)
 
+    def _has_channel(self, *names):
+        """True if the active texture set has one of the named document channels
+        (e.g. 'Height'). Used to fold the raw Height into the _dtsmdi detail only
+        when it actually exists, so the export never breaks on a missing channel."""
+        try:
+            stack = sptexset.get_active_stack()
+            CT = getattr(sptexset, "ChannelType", None)
+            existing = set(stack.all_channels().keys())
+            for n in names:
+                ct = getattr(CT, n, None) or getattr(CT, n.lower(), None)
+                if ct is not None and ct in existing:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def on_prepare_channels(self):
         """Add the Emissive + Opacity channels to the active texture set if they
         are missing (so _em / _ca can be exported)."""
@@ -2341,6 +2509,23 @@ class RwGDock(QtWidgets.QWidget):
                     add("$textureSet_opacity", "documentMap", "opacity", "gray")
                 elif a.startswith("User"):
                     add(f"$textureSet_{a.lower()}", "documentMap", a.lower(), "gray")
+            if s.get("dtsmdi_on"):
+                m = s["smdi_source"]
+                if m == "specgloss":
+                    add("$textureSet_specular", "virtualMap", "Specular", "rgb")
+                    add("$textureSet_glossiness", "virtualMap", "Glossiness", "rgb")
+                else:
+                    add("$textureSet_metallic", "documentMap", "metallic", "gray")
+                    add("$textureSet_roughness", "documentMap", "roughness", "gray")
+                    if m in ("pbr", "gltf"):
+                        add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
+                # the _dtsmdi R (detail) combines height + mesh + normal: the
+                # converted normal (normal + baked mesh + height) always, plus the
+                # raw Height channel when the project has one.
+                vname = "Normal_OpenGL" if s["normal_format"] == "opengl" else "Normal_DirectX"
+                add("$textureSet_normal", "virtualMap", vname, "rgb")
+                if self._has_channel("Height"):
+                    add("$textureSet_height", "documentMap", "height", "gray")
             if not plan:
                 self.status.setText("Tick at least one map to export."); return
 
@@ -2386,6 +2571,25 @@ class RwGDock(QtWidgets.QWidget):
                     args += ["--smdi-mode", "metrough",
                              "--metallic", maps["metallic"], "--roughness", maps["roughness"],
                              "--smdi-res", s["smdi_res"]]
+            if s.get("dtsmdi_on"):
+                m = s["smdi_source"]
+                dt = None
+                if m == "specgloss" and maps.get("specular") and maps.get("glossiness"):
+                    dt = ["--dtsmdi-mode", "specgloss",
+                          "--spec-map", maps["specular"], "--gloss-map", maps["glossiness"]]
+                elif m in ("pbr", "gltf") and maps.get("metallic") and \
+                        maps.get("roughness") and maps.get("basecolor"):
+                    dt = ["--dtsmdi-mode", m,
+                          "--metallic", maps["metallic"], "--roughness", maps["roughness"],
+                          "--smdi-basecolor", maps["basecolor"]]
+                elif maps.get("metallic") and maps.get("roughness"):
+                    dt = ["--dtsmdi-mode", "metrough",
+                          "--metallic", maps["metallic"], "--roughness", maps["roughness"]]
+                if dt is not None:
+                    args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"]] + dt
+                    det = [maps[k] for k in ("normal", "height") if maps.get(k)]
+                    if det:
+                        args += ["--dtsmdi-detail"] + det
             if s["as_on"] and maps.get("ao"):
                 args += ["--ao", maps["ao"], "--as-res", s["as_res"]]
             if s["em_on"] and maps.get("emissive"):

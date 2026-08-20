@@ -405,6 +405,96 @@ def convert_smdi_direct(spec_path, gloss_path, output_path,
         raise
 
 
+def _detail_from_maps(detail_paths, shape_hw, strength=1.0):
+    """A DT-style grayscale detail channel (average ~0.5, high-frequency) combined
+    from one or more height / normal sources, for the _dtsmdi R channel.
+
+    Each source is high-pass filtered (source minus a blurred copy); the deltas are
+    summed and re-centred at 0.5, so a raw **height** map, the baked **mesh** normal
+    and the **tangent** normal all contribute their fine detail. It fades neutrally
+    in the mipmaps - exactly what a DayZ detail (DT) map wants. Falls back to a flat
+    0.5 when no usable source is given. ``detail_paths`` may be a single path or a
+    list.
+    """
+    from PIL import ImageFilter
+    h, w = shape_hw
+    if isinstance(detail_paths, str):
+        detail_paths = [detail_paths]
+    paths = [p for p in (detail_paths or []) if p and os.path.exists(p)]
+    if not paths:
+        return np.full((h, w), 0.5, dtype=np.float32)
+    delta = np.zeros((h, w), dtype=np.float32)
+    for p in paths:
+        g = _load_gray(p)
+        if g.shape != (h, w):                          # match the target size first
+            g = np.asarray(
+                Image.fromarray((np.clip(g, 0.0, 1.0) * 255).astype(np.uint8), "L")
+                     .resize((w, h), Image.LANCZOS), dtype=np.float32) / 255.0
+        radius = max(2.0, min(h, w) / 128.0)
+        blur = np.asarray(
+            Image.fromarray((np.clip(g, 0.0, 1.0) * 255).astype(np.uint8), "L")
+                 .filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+        delta += (g - blur)
+    return np.clip(0.5 + delta * strength, 0.0, 1.0)
+
+
+def convert_dtsmdi(metal_path, roughness_path, output_path, method="gltf",
+                   basecolor_path=None, spec_path=None, gloss_path=None,
+                   detail_paths=None, detail_strength=1.0,
+                   specular_factor=1.0, glossiness_factor=1.0, resolution=1024):
+    """
+    _dtsmdi (Detail + SMDI) - the SMDI variant used by the DayZ Multimaterial
+    shader, which packs a tiling detail map into the R channel:
+
+        R = detail map  (high-frequency, average ~0.5; combined from the height +
+                         mesh + normal sources, or a flat 0.5 when none is given)
+        G = specular level  (identical to the chosen _smdi method)
+        B = gloss = 1 - roughness
+
+    ``method`` selects the green (specular level) exactly like the _smdi
+    variants: 'gltf' | 'pbr' | 'metrough' | 'specgloss'.
+    """
+    try:
+        # --- green + blue: identical maths to the matching _smdi variant ---
+        if method == "specgloss":
+            if not (spec_path and gloss_path):
+                raise ValueError("dtsmdi 'specgloss' needs spec + gloss maps.")
+            green = np.clip(_load_gray(spec_path) * specular_factor, 0.0, 1.0)
+            blue = np.clip(_load_gray(gloss_path) * glossiness_factor, 0.0, 1.0)
+        else:
+            if not (metal_path and roughness_path):
+                raise ValueError("dtsmdi needs metallic + roughness.")
+            metal = _load_gray(metal_path)
+            rough = _load_gray(roughness_path)
+            blue = np.clip((1.0 - rough) * glossiness_factor, 0.0, 1.0)
+            if method in ("gltf", "pbr"):
+                if not basecolor_path:
+                    raise ValueError("dtsmdi 'gltf'/'pbr' needs a base colour.")
+                base_lin = _srgb_to_linear(_load_rgb(basecolor_path))
+                if method == "gltf":
+                    m = metal[..., None]
+                    f0 = base_lin * m + (1.0 - m) * DIELECTRIC_F0
+                    level = _perceived_brightness(f0)
+                else:  # pbr
+                    level = ((1.0 - metal) * DIELECTRIC_F0 + metal * (
+                        0.2126 * base_lin[..., 0] + 0.7152 * base_lin[..., 1]
+                        + 0.0722 * base_lin[..., 2]))
+                green = np.clip(level * specular_factor, 0.0, 1.0)
+            else:  # metrough
+                green = np.clip((DIELECTRIC_F0 + (1.0 - DIELECTRIC_F0) * metal)
+                                * specular_factor, 0.0, 1.0)
+
+        red = _detail_from_maps(detail_paths, green.shape, detail_strength)
+        dtsmdi = np.stack([red, green, blue], axis=2)
+        _save(dtsmdi, output_path, resolution)
+        print(f"_dtsmdi saved (method={method}, "
+              f"detail={'derived' if detail_paths else 'flat 0.5'}): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating _dtsmdi texture: {e}")
+        raise
+
+
 def convert_as_texture(ao_path, output_path, invert_ao=False, resolution=1024):
     """
     _as (ambient shadow).

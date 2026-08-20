@@ -1,12 +1,12 @@
 # RwG DayZ Texture Exporter
 
 A **Substance 3D Painter** plugin that turns your project's PBR material into
-game-ready **DayZ** textures — `_co` / `_ca`, `_nohq`, `_smdi`, `_as`, `_em` —
-plus optional `.paa` conversion and a full **`.rvmat`** editor, all from a dock
-inside Painter. It even generates the **damage variants** (`_worn` / `_damage`
-/ `_destruct` …) for you.
+game-ready **DayZ** textures — `_co` / `_ca`, `_nohq`, `_smdi`, `_as`, `_em`,
+`_mc` and `_dtsmdi` — plus optional `.paa` conversion and a full **`.rvmat`**
+editor, all from a dock inside Painter. It even generates the **damage variants**
+(`_worn` / `_damage` / `_destruct` …) for you.
 
-> **Preview · v0.4.2** — feedback and edge cases welcome!
+> **Preview · v0.4.3** — feedback and edge cases welcome!
 
 ![RwG DayZ Texture Exporter](docs/preview.png)
 
@@ -19,6 +19,10 @@ inside Painter. It even generates the **damage variants** (`_worn` / `_damage`
 - **Four `_smdi` methods** — Spec+Gloss, Met+Rough, a base-colour PBR method, and
   the **canonical glTF** metal/rough → spec/gloss conversion, plus a matching
   **Spec/Gloss `_co`** diffuse.
+- **`_dtsmdi` (Detail + SMDI)** for the **Multimaterial** shader — `G`/`B` built
+  like the `_smdi`, and an `R` detail map combined from **height + mesh + normal**.
+- **Live texture-availability lights** on every RVMAT texture row (is the `.paa` /
+  `.tga` on disk?), a **card-based layout** and the RwG **red** accent.
 - **Full `.rvmat` editor**: texture stages, material colours with live colour
   pickers and estimates, a **visual Fresnel curve editor**, an environment-map
   dropdown, and material presets.

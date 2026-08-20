@@ -2,7 +2,7 @@
 
 A **Substance 3D Painter** plugin that turns a normal PBR (metal/rough) project
 into game-ready **DayZ / Enfusion** textures (`_co` / `_ca`, `_nohq`, `_smdi`,
-`_as`, `_em`, `_mc`), converts them to `.paa`, and writes a complete **Super
+`_as`, `_em`, `_mc`, `_dtsmdi`), converts them to `.paa`, and writes a complete **Super
 shader `.rvmat`** — damage / destruct variants included — all from a dock inside
 Painter.
 
@@ -117,7 +117,7 @@ standard non-metal reflectance.
    **Prefix** (or *Use texture set name*).
 4. **Maps** → tick the maps, pick resolutions.
 5. **Export .tga** (or **Export .tga + .paa**).
-6. **RVMAT** → pick a **Preset** → **Load** → **Use textures inside** →
+6. **RVMAT** → pick a **Preset** → **Load** → **Auto-fill from export** →
    **Write .rvmat**.
 
 ---
@@ -246,6 +246,29 @@ A detail/macro overlay from a Painter **User** channel — or several combined:
 > in one click with **Prepare DayZ channels** in Settings — best baked into a
 > project template.
 
+### `_dtsmdi` (Detail + SMDI) — optional
+
+The **Multimaterial** shader replaces the normal `_smdi` with a `_dtsmdi`, which
+packs a fine **detail map** into the red channel while keeping the same specular /
+gloss in green / blue:
+
+- **`R` = detail** — a high-frequency detail map combined from **height + baked
+  mesh + normal**. Painter's converted normal is always used; the raw **Height**
+  channel is added when the project has one. Each source is high-passed (its
+  low-frequency shape removed) and the deltas are summed around a neutral **0.5**,
+  so the map fades out in the mip-chain instead of darkening the surface.
+- **`G` = specular level, `B` = gloss** — built exactly like the `_smdi`: same
+  source dropdown (Spec+Gloss / Met+Rough / PBR / glTF) and the same **G / B**
+  sliders.
+
+Tick **`_dtsmdi`** on the Maps tab and give it its own resolution; it's written as
+`<prefix>_dtsmdi`. In the `.rvmat` this is the map the Multimaterial shader reads
+in place of the Super shader's `_smdi`.
+
+> **Tip:** `_dtsmdi` and `_smdi` are alternatives — the Super shader uses `_smdi`,
+> the Multimaterial shader uses `_dtsmdi`. You don't normally need both for the
+> same material.
+
 ---
 
 ## Export & `.paa`
@@ -258,7 +281,7 @@ After an export the plugin can auto-fill the RVMAT texture fields with the paths
 it just wrote.
 
 > **Tip:** `.tga` is your editable/previewable copy; `.paa` is what the game
-> packs. Keep both — the rvmat can reference either (set the **Texture ext** on
+> packs. Keep both — the rvmat can reference either (set the **Texture paths use** on
 > the RVMAT tab).
 
 ---
@@ -281,11 +304,18 @@ The Super-shader stage layout the plugin writes:
 
 Each texture field (**NOHQ / AS / SMDI / MC**) has three icon buttons: **browse**
 (pick a file, stored mod-relative), **open** (view in TexView / default app), and
-**default** (reset to the procedural value). **Texture ext** picks `.paa`/`.tga`,
-and **Use textures inside** fills NOHQ/AS/SMDI with the real exported paths.
+**default** (reset to the procedural value). **Texture paths use** picks `.paa`/`.tga`,
+and **Auto-fill from export** fills NOHQ/AS/SMDI with the real exported paths.
+
+Behind each field is a small **availability light** that checks the disk live:
+**green** = the referenced file exists, **amber** = only the *other* extension is
+there (so convert it, or switch **Texture paths use**), **red** = nothing found,
+**grey** = a procedural default (nothing to check). Hover it for the resolved
+path. It's a quick way to catch a typo'd path or a `.paa` you forgot to convert
+before the material ever reaches the game.
 
 > **Tip:** Store paths **mod-relative** — set your **Mod drive** (`P:\`) in
-> Settings and keep the output inside it, or "Use textures inside" will fall back
+> Settings and keep the output inside it, or "Auto-fill from export" will fall back
 > to a folder-relative path.
 
 ---
@@ -468,7 +498,7 @@ back. **Save the Painter project** to persist the metadata to disk.
    **Met→Spec/Gloss (glTF)** (the default). Export.
 3. **RVMAT** → pick the metal in **Preset → Load** *or* **material N/K → Apply**;
    then the **specular estimate** droplet to pull the exact tint from your art.
-4. Set an **env** map; **Use textures inside**; **Write .rvmat**.
+4. Set an **env** map; **Auto-fill from export**; **Write .rvmat**.
 
 > **Tip:** Casings/shells: gloss **B ≈ 0.7–0.85** for polished, lower for worn.
 
@@ -613,7 +643,7 @@ estimate or material N/K) **and** an **env** map. `_smdi` only makes it shiny.
 **The Material Editor ignores specularPower.** — It must be an integer (the plugin
 writes it as one) and the specular must not be black.
 
-**"Use textures inside" wrote only file names.** — Set the **Mod drive** and put
+**"Auto-fill from export" wrote only file names.** — Set the **Mod drive** and put
 the output inside it so paths can be made mod-relative.
 
 **Surface lit from the wrong side.** — Flip the **normal format** (opengl/directx)
@@ -686,6 +716,18 @@ transparent and only your marks show. See the `_mc` walkthrough.
 ## Changelog
 
 Latest releases; full history in `CHANGELOG.md`.
+
+### v0.4.3 — Preview (2026-08-20)
+
+**Maps** — new **`_dtsmdi` (Detail + SMDI)** export for the **Multimaterial**
+shader: `R` = a fine detail map combined from **height + baked mesh + normal**,
+with `G` / `B` built exactly like the `_smdi`. Own map row + resolution.
+**RVMAT / UI** — live **paa / tga availability lights** behind every texture row
+(green = on disk, amber = only the other extension, red = missing, grey =
+procedural); clearer wording (*Texture ext* → **Texture paths use**, *Use textures
+inside* → **Auto-fill from export**); a **card-based layout** (RVMAT split into
+Textures / Material / Write cards); and the RwG **red** accent (`#E4141F`) with
+larger, bold card titles.
 
 ### v0.4.2 — Preview (2026-08-20)
 

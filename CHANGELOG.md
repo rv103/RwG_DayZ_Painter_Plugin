@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.4.3 — Preview (2026-08-20)
+
+A maps + UI release: a new `_dtsmdi` map for the Multimaterial shader, live
+texture-availability lights, clearer wording, and a card-based, red-accented
+layout.
+
+### Maps
+
+- **New `_dtsmdi` export (Detail + SMDI)** for the DayZ **Multimaterial** shader.
+  `R` = a fine detail map, `G` = specular level, `B` = gloss — G/B built exactly
+  like the `_smdi` (same method + the G/B sliders). The **detail (R)** combines
+  **height + baked mesh + normal**: Painter's converted normal always, plus the
+  raw **Height** channel when the project has one (high-passed, averaged ~0.5 so
+  it fades neutrally in the mipmaps). Own map row + resolution; written as
+  `<prefix>_dtsmdi`.
+
+### RVMAT / UI
+
+- **paa / tga availability lights.** Each texture row (NOHQ / AS / SMDI / MC) now
+  has a small traffic-light: green = the referenced file is on disk, amber = only
+  the other extension exists (convert / switch ext), red = nothing found, grey =
+  procedural default. Hover for details; updates live.
+- **Clearer wording.** *Texture ext* → **Texture paths use** (with a `.paa = game
+  · .tga = preview` hint); *Use textures inside* → **Auto-fill from export**, with
+  fuller tooltips.
+- **Card layout.** Every section is now a titled, bordered card. The RVMAT tab is
+  split into **Textures / Material / Write** cards (plus Damage variants) for a
+  clearer structure.
+- **RwG red accent.** The UI accent switched from green to the RwG red (`#E4141F`,
+  matching rwg-addon.com) on headers, cards, active tab, checked boxes, focus and
+  sliders; card titles are larger and bold.
+
 ## v0.4.2 — Preview (2026-08-20)
 
 A small clarity + defaults release for the map export, based on how the DayZ

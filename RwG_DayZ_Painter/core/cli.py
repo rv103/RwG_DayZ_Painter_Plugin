@@ -108,6 +108,20 @@ def run(args):
     except Exception as e:
         result["errors"].append(f"_smdi: {e}")
 
+    if args.dtsmdi:
+        try:
+            dt_res = _res(args.dtsmdi_res, args.resolution)
+            base_for_dt = args.smdi_basecolor or args.basecolor
+            result["tga"]["_dtsmdi"] = conversion.convert_dtsmdi(
+                args.metallic, args.roughness, out("_dtsmdi"),
+                method=args.dtsmdi_mode, basecolor_path=base_for_dt,
+                spec_path=args.spec_map, gloss_path=args.gloss_map,
+                detail_paths=args.dtsmdi_detail,
+                specular_factor=args.spec, glossiness_factor=args.gloss,
+                resolution=dt_res)
+        except Exception as e:
+            result["errors"].append(f"_dtsmdi: {e}")
+
     if args.ao:
         try:
             result["tga"]["_as"] = conversion.convert_as_texture(
@@ -304,6 +318,15 @@ def build_parser():
                    help="How to build _smdi. auto = infer from the maps given.")
     p.add_argument("--smdi-basecolor", dest="smdi_basecolor",
                    help="Raw base colour for the 'pbr' _smdi method (metal F0).")
+    p.add_argument("--dtsmdi", action="store_true",
+                   help="Also export a _dtsmdi (Detail+SMDI) map for the Multimaterial shader.")
+    p.add_argument("--dtsmdi-mode", dest="dtsmdi_mode", default="gltf",
+                   choices=["gltf", "pbr", "metrough", "specgloss"],
+                   help="How to build the _dtsmdi green (specular level), like --smdi-mode.")
+    p.add_argument("--dtsmdi-detail", dest="dtsmdi_detail", nargs="+",
+                   help="Height/normal source(s) for the _dtsmdi R (detail) channel "
+                        "- combined (height + mesh + normal); omit for a flat 0.5.")
+    p.add_argument("--dtsmdi-res", dest="dtsmdi_res", type=int)
     p.add_argument("--output")
     p.add_argument("--prefix")
     p.add_argument("--co-mode", default="base_color",
