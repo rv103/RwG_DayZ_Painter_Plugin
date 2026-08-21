@@ -55,6 +55,10 @@ library (N/K + specular tint, save your own):
 |:---:|:---:|:---:|
 | ![Setup](docs/tab-setup.png) | ![Colour editor](docs/colour-editor.png) | ![Settings](docs/settings.png) |
 
+| Export | Material | Write | Damage variants |
+|:---:|:---:|:---:|:---:|
+| ![Export](docs/tab-export.png) | ![Material](docs/material-card.png) | ![Write](docs/tab-write.png) | ![Damage variants](docs/tab-damage.png) |
+
 ## Requirements
 
 - **Substance 3D Painter** (PySide6 on 2024+, PySide2 on older versions — both

@@ -6,6 +6,8 @@ into game-ready **DayZ / Enfusion** textures (`_co` / `_ca`, `_nohq`, `_smdi`,
 shader `.rvmat`** — damage / destruct variants included — all from a dock inside
 Painter.
 
+![RwG DayZ Texture Exporter](https://raw.githubusercontent.com/rv103/RwG_DayZ_Painter_Plugin/main/docs/preview.png)
+
 > This document is a full manual. Each `##` section is self-contained and can
 > become its own wiki page; the Table of Contents maps to them. Look for the
 > **Tip** call-outs.
