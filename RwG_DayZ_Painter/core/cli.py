@@ -125,6 +125,7 @@ def run(args):
                 method=args.dtsmdi_mode, basecolor_path=base_for_dt,
                 spec_path=args.spec_map, gloss_path=args.gloss_map,
                 detail_paths=args.dtsmdi_detail,
+                detail_strength=args.dtsmdi_strength,
                 specular_factor=args.spec, glossiness_factor=args.gloss,
                 resolution=dt_res)
         except Exception as e:
@@ -337,6 +338,10 @@ def build_parser():
     p.add_argument("--dtsmdi-detail", dest="dtsmdi_detail", nargs="+",
                    help="Height/normal source(s) for the _dtsmdi R (detail) channel "
                         "- combined (height + mesh + normal); omit for a flat 0.5.")
+    p.add_argument("--dtsmdi-strength", dest="dtsmdi_strength", type=float,
+                   default=1.0,
+                   help="Amplitude of the _dtsmdi R (detail) around 0.5 "
+                        "(1.0 = default). The map stays centred on 0.5.")
     p.add_argument("--dtsmdi-res", dest="dtsmdi_res", type=int)
     p.add_argument("--output")
     p.add_argument("--prefix")

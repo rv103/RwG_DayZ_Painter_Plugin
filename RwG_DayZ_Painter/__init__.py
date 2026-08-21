@@ -48,7 +48,14 @@ from .core import rvmat_writer, paa_tools
 
 
 PLUGIN_TITLE = "RwG DayZ Texture Exporter"
-PLUGIN_VERSION = "0.4.3"
+PLUGIN_VERSION = "0.4.5b"
+# GitHub project (source, releases, wiki) + the API used for the version check.
+GITHUB_REPO_URL = "https://github.com/rv103/RwG_DayZ_Painter_Plugin"
+GITHUB_RELEASES_URL = GITHUB_REPO_URL + "/releases"
+GITHUB_WIKI_URL = GITHUB_REPO_URL + "/wiki"
+# list endpoint (not /releases/latest) so pre-releases are included in the check
+GITHUB_API_RELEASES = ("https://api.github.com/repos/rv103/"
+                       "RwG_DayZ_Painter_Plugin/releases?per_page=10")
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(PLUGIN_DIR, "rwg_dayz_settings.json")
 # user-defined RVMAT material presets (global, shared across all projects)
@@ -67,9 +74,16 @@ USER_PRESETS_NAME = "rwg_dayz_user_presets.json"
 USER_FRESNEL_NAME = "rwg_dayz_user_fresnel.json"
 
 HELP_HTML = """
-<h3>RwG DayZ Texture Exporter</h3>
+<h3>RwG DayZ Texture Exporter <span style="color:#9aa0a6;">v{version}</span></h3>
 <p>Turns your Substance Painter project into DayZ textures
-(<b>_co, _nohq, _smdi, _as</b>), optional <b>.paa</b>, and a matching <b>.rvmat</b>.</p>
+(<b>_co / _ca, _nohq, _smdi, _as, _em, _mc, _dtsmdi</b>), optional <b>.paa</b>, and a
+matching Super-shader <b>.rvmat</b> - damage variants included.</p>
+<p><b>Project &amp; docs:</b>
+<a href="{repo}">GitHub</a> &nbsp;&middot;&nbsp;
+<a href="{releases}">Releases / changelog</a> &nbsp;&middot;&nbsp;
+<a href="{wiki}">Wiki (full manual)</a><br>
+<i>Use <b>Check for updates</b> below to compare this version with the latest
+release on GitHub.</i></p>
 
 <b>Setup</b>
 <ul>
@@ -87,37 +101,50 @@ channels</b> - adds Emissive + Opacity + User0-User2 (colour) to the active text
 <li><b>Painter preset</b> - runs your own saved export preset as-is (no external Python needed).</li>
 </ul>
 
-<b>Maps (recommended)</b>
+<b>Maps</b>
 <ul>
-<li><b>_co</b>: use <b>Diffuse</b> (metal/rough converted; metals go black). 2D View / Base Color are alternatives. Tick <b>alpha (_ca)</b> to add an Opacity alpha and export as <b>_ca</b> instead (for transparent materials).</li>
-<li><b>_nohq</b>: <b>DirectX</b> for DayZ - combines normal + height + baked mesh normal (never flat).</li>
-<li><b>_smdi</b>: R=white, G=specular, B=gloss. Source dropdown:
-<b>Spec+Gloss (convert maps)</b> uses Painter's converted Specular+Glossiness;
-<b>Met+Rough (channels)</b> builds it straight from metallic+roughness (metals
-go full specular); <b>Met+Rough+BaseColor (PBR)</b> gives each metal its real
-reflectance from the base colour. G/B sliders default 1.0.</li>
+<li><b>_co</b>: default <b>Base Color - metals keep color</b> (the DayZ colour map
+carries the metal colour; reflectivity rides in the _smdi). Alternatives: <b>Diffuse
+(metals black)</b>, 2D View, Base Color + Specular, Spec/Gloss diffuse (glTF). Tick
+<b>alpha (_ca)</b> to add an Opacity alpha and write <b>_ca</b> instead (transparent
+materials).</li>
+<li><b>_nohq</b>: <b>DirectX</b> for DayZ - combines normal + height + baked mesh normal
+(never flat). Format is switchable and remembered per project.</li>
+<li><b>_smdi</b>: R=white, G=specular, B=gloss. Its <b>G</b> / <b>B</b> sliders sit
+inline on the _smdi row (1.00 = unchanged) and also drive the _dtsmdi G/B. Source
+dropdown - default <b>Met-&gt;Spec/Gloss (glTF)</b>; also Spec+Gloss (converted maps),
+Met+Rough (flat metal spec), Met+Rough+BaseColor (PBR).</li>
+<li><b>_dtsmdi</b> (Multimaterial shader): sits right under _smdi. <b>R = a detail
+map</b> (height + baked mesh + normal, centred on 0.5 so it fades in the mipmaps),
+<b>G/B like the _smdi</b>. Its inline <b>Detail (R)</b> slider scales how pronounced
+the detail is - amplitude only, the mid-point stays 0.5. Replaces the _smdi for the
+Multimaterial shader.</li>
 <li><b>_as</b>: DayZ layout, R/B white, G=mixed AO. 512 is usually enough.</li>
 <li><b>_em</b> (optional): emissive / glow, straight from the project's Emissive channel.</li>
 <li><b>_mc</b> (optional): macro, from a Painter <b>User channel</b> (User0-2, RGB), or
 <b>Combine</b> to stack all three with a blend mode. The <b>alpha</b> is the DayZ blend
 mask (1 = only macro, 0 = only base): <b>Auto</b> derives it from the macro's brightness
-(applies where you painted), or pick a channel / Opacity, or None for opaque. The path
-auto-fills the MC (Stage3) field. Use <b>Settings → Prepare DayZ channels</b> for the
-User channels.</li>
+(applies where you painted), or pick a channel / Opacity, or None for opaque. Use
+<b>Settings → Prepare DayZ channels</b> for the User channels.</li>
 </ul>
-<p>Each map has its own checkbox and size (256-2048). _em / _mc are off by default.
-_co and _ca are the same map - the <b>alpha (_ca)</b> tick decides which one is written.</p>
+<p>Each map has its own checkbox and size (256-2048). _em / _mc / _dtsmdi are off by
+default. _co and _ca are the same map - the <b>alpha (_ca)</b> tick decides which is
+written.</p>
 
 <b>Export</b>
 <ul>
 <li>.tga is always written; .paa needs DayZ Tools <b>ImageToPAA.exe</b>.</li>
-<li><b>Convert .tga -&gt; .paa (folder)</b> batch-converts an existing folder.</li>
+<li><b>Also fill the RVMAT texture fields</b> (checkbox above the export buttons, on by
+default): after an export, write the produced paths into the RVMAT NOHQ/AS/SMDI/MC
+fields. Turn it off to export the maps only and leave the rvmat untouched.</li>
+<li><b>Convert .tga -&gt; .paa (folder)</b> is a standalone batch tool, independent of
+the project export.</li>
 </ul>
 
 <b>RVMAT</b>
 <ul>
-<li><b>Texture paths use</b>: .paa (packed, what the game loads) or .tga (raw, for
-preview) for the texture paths written into the rvmat.</li>
+<li><b>Texture paths use</b>: <b>.tga</b> (raw, for preview - the default) or <b>.paa</b>
+(packed, what the game loads) for the texture paths written into the rvmat.</li>
 <li>Each texture row has a small <b>availability light</b>: green = the referenced
 file is on disk, amber = only the other extension is there (convert it or switch the
 extension), red = nothing found, grey = procedural default. Hover it for details.</li>
@@ -141,13 +168,15 @@ etc.) writes <b>&lt;prefix&gt;&lt;suffix&gt;.rvmat</b> from the current base - i
 except the MC (Stage3) is swapped to that damage <b>_mc</b>. Same idea as RwG RVMat Speedo.</li>
 </ul>
 
-<b>How the _smdi is calculated</b>
+<b>How the _smdi (and _dtsmdi G/B) is calculated</b>
 <p>The DayZ _smdi is packed as <b>R = white (1.0)</b>, <b>G = specular level</b>,
 <b>B = gloss (= 1 - roughness)</b>. All values run 0..1; the plugin writes
 <code>round(value * 255)</code> per channel. The source options only differ
 in where G comes from (B is always <code>1 - Roughness</code>) - the <b>G</b> and
 <b>B</b> sliders (default 1.0) scale each channel afterwards:</p>
 <ul>
+<li><b>Met-&gt;Spec/Gloss (glTF)</b> - the recommended default, canonical glTF metric:<br>
+<code>G = perceivedBrightness(mix(0.04, baseColor, metallic)) * G-slider</code></li>
 <li><b>Spec+Gloss (convert maps)</b> - uses Painter's converted maps directly.
 Even a Metallic/Roughness project works because Painter converts them:<br>
 <code>G = clamp(Specular * G-slider, 0, 1)</code></li>
@@ -159,12 +188,12 @@ reflectance from the (linearised) base-colour luminance, so dull metal stays
 darker than polished. Dielectrics keep the 0.04 floor:<br>
 <code>G = clamp(lerp(0.04, luminance(baseColor), Metallic) * G-slider, 0, 1)</code></li>
 </ul>
-<p>Spec+Gloss respects a hand-authored specular, Met+Rough is the punchy full-metal
-shortcut, and PBR is the reflectance-accurate middle ground (needs the base colour).</p>
+<p>The <b>_dtsmdi</b> uses the same G/B; only its <b>R</b> differs (the detail map).</p>
 
 <p><i>Note: _co is not an rvmat stage in DayZ - it is assigned on the model. The
-material references _nohq, _as and _smdi.</i></p>
-"""
+material references _nohq, _as and _smdi (or _dtsmdi for the Multimaterial shader).</i></p>
+""".format(version=PLUGIN_VERSION, repo=GITHUB_REPO_URL,
+           releases=GITHUB_RELEASES_URL, wiki=GITHUB_WIKI_URL)
 
 DOCK_QSS = """
 QLabel#title { font-weight: bold; font-size: 15px; color: #ff5a62; }
@@ -277,10 +306,10 @@ def load_settings():
         "em_res": "1024", "mc_res": "2048", "dtsmdi_res": "2048",
         "co_source": "base_color",
         "smdi_source": "gltf",
-        "smdi_green": 1.0, "smdi_blue": 1.0,
+        "smdi_green": 1.0, "smdi_blue": 1.0, "dtsmdi_strength": 1.0,
         "preset": "Default", "mateditor": "", "texview": "", "autosync": True,
         "mode": "builtin", "painter_preset": "DayZ", "preset_shelf": "your_assets",
-        "tex_ext": "paa",
+        "tex_ext": "tga",
         "mat_ambient": "1,1,1,1", "mat_diffuse": "1,1,1,1",
         "mat_forced": "0,0,0,1", "mat_emmisive": "0,0,0,0",
         "mat_specular": "1,1,1,1", "mat_power": "30.0",
@@ -1114,25 +1143,86 @@ class RwGDock(QtWidgets.QWidget):
             "  Met->Spec/Gloss (glTF), recommended - the canonical glTF conversion: G = perceived "
             "brightness of mix(0.04, baseColor, metallic). Like PBR, canonical metric.")
         self.smdi_res = self._res_combo("smdi_res", "2048")
+        # _smdi - the G (specular) / B (gloss) sliders sit inline on this row, in
+        # the gap between the source dropdown and the size combo. They also scale
+        # the _dtsmdi G/B, so they stay always available.
+        smdi_mid = QtWidgets.QHBoxLayout()
+        smdi_mid.setSpacing(6)
+        smdi_mid.addWidget(self.smdi_source)
+        smdi_mid.addSpacing(10)
+        g_cap, self.smdi_green, g_val = self._labeled_slider("G", "smdi_green", 1.0)
+        smdi_mid.addWidget(g_cap)
+        smdi_mid.addWidget(self.smdi_green, 1)
+        smdi_mid.addWidget(g_val)
+        smdi_mid.addSpacing(10)
+        b_cap, self.smdi_blue, b_val = self._labeled_slider("B", "smdi_blue", 1.0)
+        smdi_mid.addWidget(b_cap)
+        smdi_mid.addWidget(self.smdi_blue, 1)
+        smdi_mid.addWidget(b_val)
         grid.addWidget(self.smdi_cb, 3, 0)
-        grid.addLayout(middle(self.smdi_source), 3, 1)
+        grid.addLayout(smdi_mid, 3, 1)
         grid.addWidget(self.smdi_res, 3, 2)
+
+        # _dtsmdi (Detail + SMDI) - directly under _smdi; for the Multimaterial
+        # shader. R = detail from the normal, G/B = same as _smdi. The Detail (R)
+        # strength slider sits inline on this row, before the size combo.
+        self.dtsmdi_cb = QtWidgets.QCheckBox("_dtsmdi")
+        self.dtsmdi_cb.setChecked(self.s.get("dtsmdi_on", False))
+        self.dtsmdi_cb.setToolTip(
+            "Detail + SMDI map for the DayZ Multimaterial shader.\n"
+            "  R = a fine detail map from height + baked mesh + normal (avg ~0.5)\n"
+            "  G = specular level, B = gloss  - built exactly like the _smdi above\n"
+            "     (uses the same _smdi method + the G/B sliders).\n"
+            "Needs metallic + roughness (+ base colour for the glTF/PBR method);\n"
+            "the normal supplies the detail. Written as <prefix>_dtsmdi.")
+        self.dtsmdi_res = self._res_combo("dtsmdi_res", "2048")
+        dt_mid = QtWidgets.QHBoxLayout()
+        dt_mid.setSpacing(6)
+        dt_mid.addWidget(QtWidgets.QLabel("(Multimaterial)"))
+        dt_mid.addSpacing(10)
+        self.dtsmdi_strength_lbl = QtWidgets.QLabel("Detail")
+        self.dtsmdi_strength_lbl.setToolTip(
+            "Scales how pronounced the _dtsmdi detail (red channel) is.\n"
+            "The map always stays centred on 0.5 (BI's 'average 0.5, fades in\n"
+            "the mipmaps' rule) - this only changes the amplitude of the detail,\n"
+            "not its mid-point. 1.00 = default; higher = crisper, lower = subtler.")
+        dt_mid.addWidget(self.dtsmdi_strength_lbl)
+        d_cap, self.dtsmdi_strength, d_val = self._labeled_slider(
+            "R", "dtsmdi_strength", 1.0)
+        d_cap.setToolTip(self.dtsmdi_strength_lbl.toolTip())
+        dt_mid.addWidget(d_cap)
+        dt_mid.addWidget(self.dtsmdi_strength, 1)
+        dt_mid.addWidget(d_val)
+        grid.addWidget(self.dtsmdi_cb, 4, 0)
+        grid.addLayout(dt_mid, 4, 1)
+        grid.addWidget(self.dtsmdi_res, 4, 2)
+
+        # enable the Detail (R) strength widgets only when _dtsmdi is ticked
+        _dt_strength_widgets = (self.dtsmdi_strength_lbl, d_cap,
+                                self.dtsmdi_strength, d_val)
+
+        def _sync_dtsmdi_strength(*_):
+            on = self.dtsmdi_cb.isChecked()
+            for w in _dt_strength_widgets:
+                w.setEnabled(on)
+        self.dtsmdi_cb.toggled.connect(_sync_dtsmdi_strength)
+        _sync_dtsmdi_strength()
 
         # _as
         self.as_cb = QtWidgets.QCheckBox("_as")
         self.as_cb.setChecked(self.s.get("as_on", True))
         self.as_res = self._res_combo("as_res", "1024")
-        grid.addWidget(self.as_cb, 4, 0)
-        grid.addLayout(middle("(DayZ standard)"), 4, 1)
-        grid.addWidget(self.as_res, 4, 2)
+        grid.addWidget(self.as_cb, 5, 0)
+        grid.addLayout(middle("(DayZ standard)"), 5, 1)
+        grid.addWidget(self.as_res, 5, 2)
 
         # _em (emissive) - off by default
         self.em_cb = QtWidgets.QCheckBox("_em")
         self.em_cb.setChecked(self.s.get("em_on", False))
         self.em_res = self._res_combo("em_res", "1024")
-        grid.addWidget(self.em_cb, 5, 0)
-        grid.addLayout(middle("(Emissive channel)"), 5, 1)
-        grid.addWidget(self.em_res, 5, 2)
+        grid.addWidget(self.em_cb, 6, 0)
+        grid.addLayout(middle("(Emissive channel)"), 6, 1)
+        grid.addWidget(self.em_res, 6, 2)
 
         # _mc (macro) - off by default; RGB from a Painter User channel
         self.mc_cb = QtWidgets.QCheckBox("_mc")
@@ -1157,53 +1247,35 @@ class RwGDock(QtWidgets.QWidget):
                                  "brightness (applies where you painted); or pick a "
                                  "channel; None = opaque.")
         self.mc_res = self._res_combo("mc_res", "2048")
-        grid.addWidget(self.mc_cb, 6, 0)
+        grid.addWidget(self.mc_cb, 7, 0)
         grid.addLayout(middle("from", self.mc_source, self.mc_blend,
-                              "a:", self.mc_alpha), 6, 1)
-        grid.addWidget(self.mc_res, 6, 2)
-
-        # _dtsmdi (Detail + SMDI) - off by default; for the Multimaterial shader.
-        # R = detail derived from the normal, G/B = same as _smdi (method + sliders).
-        self.dtsmdi_cb = QtWidgets.QCheckBox("_dtsmdi")
-        self.dtsmdi_cb.setChecked(self.s.get("dtsmdi_on", False))
-        self.dtsmdi_cb.setToolTip(
-            "Detail + SMDI map for the DayZ Multimaterial shader.\n"
-            "  R = a fine detail map from height + baked mesh + normal (avg ~0.5)\n"
-            "  G = specular level, B = gloss  - built exactly like the _smdi above\n"
-            "     (uses the same _smdi method + the G/B sliders).\n"
-            "Needs metallic + roughness (+ base colour for the glTF/PBR method);\n"
-            "the normal supplies the detail. Written as <prefix>_dtsmdi.")
-        self.dtsmdi_res = self._res_combo("dtsmdi_res", "2048")
-        grid.addWidget(self.dtsmdi_cb, 7, 0)
-        grid.addLayout(middle("(Multimaterial: R = detail, G/B like _smdi)"), 7, 1)
-        grid.addWidget(self.dtsmdi_res, 7, 2)
+                              "a:", self.mc_alpha), 7, 1)
+        grid.addWidget(self.mc_res, 7, 2)
 
         layout.addLayout(grid)
 
-        # --- SMDI tuning: G (specular) / B (gloss) sliders on their own row so
-        #     the value stays fully visible ---
-        srow = QtWidgets.QHBoxLayout()
-        srow.setSpacing(6)
-        lbl_smdi = QtWidgets.QLabel("SMDI tuning:")
-        lbl_smdi.setToolTip("Scale the _smdi Green (specular) and Blue (gloss) "
-                            "channels. 1.00 = unchanged.")
-        srow.addWidget(lbl_smdi)
-        g_cap, self.smdi_green, g_val = self._labeled_slider("G", "smdi_green", 1.0)
-        srow.addWidget(g_cap)
-        srow.addWidget(self.smdi_green, 1)
-        srow.addWidget(g_val)
-        srow.addSpacing(12)
-        b_cap, self.smdi_blue, b_val = self._labeled_slider("B", "smdi_blue", 1.0)
-        srow.addWidget(b_cap)
-        srow.addWidget(self.smdi_blue, 1)
-        srow.addWidget(b_val)
-        layout.addLayout(srow)
-
-        hint("SMDI tuning: G scales specular, B scales gloss (1.00 = unchanged).   "
+        hint("SMDI tuning: G scales specular, B scales gloss (1.00 = unchanged); "
+             "Detail sets the _dtsmdi detail strength.   "
              "Per-map details and recommendations are in the  ?  help.")
 
         # --- paa + export ---
         header("Export  (.tga is always written; .paa optional)")
+
+        # Export option (applies to the buttons below): after an export, also
+        # write the produced texture paths into the RVMAT NOHQ/AS/SMDI/MC fields.
+        # Off => export textures only, leave the rvmat untouched (you can still
+        # fill it later with "Auto-fill from export" on the RVMAT tab).
+        self.autofill_cb = QtWidgets.QCheckBox(
+            "Also fill the RVMAT texture fields (NOHQ / AS / SMDI / MC)")
+        self.autofill_cb.setChecked(self.s.get("autofill_on_export", True))
+        self.autofill_cb.setToolTip(
+            "On  - after an export, fill the RVMAT texture paths with what was\n"
+            "      just exported (the old behaviour).\n"
+            "Off - export the textures only and leave the RVMAT fields alone;\n"
+            "      use this when you just want the maps, not an rvmat update.\n"
+            "The 'Auto-fill from export' button on the RVMAT tab always works\n"
+            "regardless of this checkbox.")
+        layout.addWidget(self.autofill_cb)
 
         b1 = QtWidgets.QHBoxLayout()
         for text, fn in (("Export .tga", lambda: self._do_export(False)),
@@ -1215,25 +1287,14 @@ class RwGDock(QtWidgets.QWidget):
             btn.clicked.connect(fn)
             b1.addWidget(btn)
         layout.addLayout(b1)
+
+        # standalone batch utility - convert an existing folder of .tga to .paa
+        conv_hint = QtWidgets.QLabel("Batch tool \u2014 independent of the export above:")
+        conv_hint.setStyleSheet("color:#9aa0a6;")
+        layout.addWidget(conv_hint)
         folder_btn = QtWidgets.QPushButton("Convert .tga \u2192 .paa (folder)")
         folder_btn.clicked.connect(self.on_convert_folder_paa)
         layout.addWidget(folder_btn)
-
-        # After an export, optionally write the produced texture paths into the
-        # RVMAT NOHQ/AS/SMDI/MC fields. Off => export textures only, leave the
-        # rvmat untouched (you can still fill it later with "Auto-fill from
-        # export" on the RVMAT tab).
-        self.autofill_cb = QtWidgets.QCheckBox(
-            "Enter exported textures into the RVMAT (NOHQ / AS / SMDI / MC)")
-        self.autofill_cb.setChecked(self.s.get("autofill_on_export", True))
-        self.autofill_cb.setToolTip(
-            "On  - after an export, fill the RVMAT texture paths with what was\n"
-            "      just exported (the old behaviour).\n"
-            "Off - export the textures only and leave the RVMAT fields alone;\n"
-            "      use this when you just want the maps, not an rvmat update.\n"
-            "The 'Auto-fill from export' button on the RVMAT tab always works\n"
-            "regardless of this checkbox.")
-        layout.addWidget(self.autofill_cb)
 
         # --- RVMAT tab ---
         end_page()
@@ -1244,7 +1305,7 @@ class RwGDock(QtWidgets.QWidget):
         rext.addWidget(QtWidgets.QLabel("Texture paths use:"))
         self.tex_ext_combo = QtWidgets.QComboBox()
         self.tex_ext_combo.addItems([".paa", ".tga"])
-        self.tex_ext_combo.setCurrentText("." + self.s.get("tex_ext", "paa"))
+        self.tex_ext_combo.setCurrentText("." + self.s.get("tex_ext", "tga"))
         self.tex_ext_combo.setToolTip(
             "Which file extension the .rvmat points its texture stages at.\n"
             ".paa is the packed texture the game loads; .tga is the raw file,\n"
@@ -1492,6 +1553,12 @@ class RwGDock(QtWidgets.QWidget):
             self.smdi_blue: "Scales the _smdi Blue (gloss = 1 - roughness). "
                             "1.00 = unchanged.",
             self.smdi_res: "Output resolution for _smdi.",
+            self.dtsmdi_cb: "Export the _dtsmdi (Detail + SMDI) for the "
+                            "Multimaterial shader. R = detail, G/B like _smdi.",
+            self.dtsmdi_res: "Output resolution for _dtsmdi.",
+            self.dtsmdi_strength: "Amplitude of the _dtsmdi detail (R) around 0.5. "
+                                  "Higher = crisper detail; the map stays centred "
+                                  "on 0.5 so it fades in the mipmaps. 1.00 = default.",
             self.as_cb: "Export the _as (ambient shadow). DayZ layout: R/B white, G = mixed AO.",
             self.as_res: "Output resolution for _as. 512 is usually plenty.",
             self.em_cb: "Export the _em (emissive / glow) from the project's Emissive channel.",
@@ -1818,6 +1885,7 @@ class RwGDock(QtWidgets.QWidget):
                             else "specgloss"),
             "smdi_green": self.smdi_green.value() / 100.0,
             "smdi_blue": self.smdi_blue.value() / 100.0,
+            "dtsmdi_strength": self.dtsmdi_strength.value() / 100.0,
             "preset": self._selected_builtin_preset(),
             "autosync": self.autosync_cb.isChecked(),
             "mode": "preset" if self.mode_combo.currentText() == "Painter preset" else "builtin",
@@ -1845,17 +1913,101 @@ class RwGDock(QtWidgets.QWidget):
     def on_help(self):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("RwG DayZ Texture Exporter - Help")
-        dlg.resize(540, 580)
+        dlg.setStyleSheet(DOCK_QSS)
+        dlg.resize(560, 620)
         v = QtWidgets.QVBoxLayout(dlg)
-        view = QtWidgets.QTextEdit()
-        view.setReadOnly(True)
+        view = QtWidgets.QTextBrowser()          # QTextBrowser => clickable links
+        view.setOpenExternalLinks(True)
         view.setHtml(HELP_HTML)
         v.addWidget(view)
+
+        # version row: installed version + an online check against GitHub releases
+        vrow = QtWidgets.QHBoxLayout()
+        vrow.addWidget(QtWidgets.QLabel(f"Installed: v{PLUGIN_VERSION}"))
+        self._update_status = QtWidgets.QLabel("")
+        self._update_status.setTextFormat(QtCore.Qt.RichText)
+        self._update_status.setOpenExternalLinks(True)
+        self._update_status.setStyleSheet("color:#9aa0a6;")
+        vrow.addWidget(self._update_status, 1)
+        chk = QtWidgets.QPushButton("Check for updates")
+        chk.setToolTip("Compare this version with the latest release on GitHub "
+                       "(includes pre-releases). Needs an internet connection.")
+        chk.clicked.connect(lambda: self._check_updates(chk))
+        vrow.addWidget(chk)
+        gh = QtWidgets.QPushButton("Open GitHub")
+        gh.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl(GITHUB_REPO_URL)))
+        vrow.addWidget(gh)
+        v.addLayout(vrow)
+
         close = QtWidgets.QPushButton("Close")
         close.clicked.connect(dlg.accept)
         v.addWidget(close)
         run = getattr(dlg, "exec", None) or getattr(dlg, "exec_")
         run()
+
+    @staticmethod
+    def _version_tuple(s):
+        """'v0.4.3' / '0.4.3-preview' -> (0, 4, 3) for a numeric compare."""
+        out = []
+        for part in str(s).strip().lstrip("vV").split("."):
+            num = ""
+            for ch in part:
+                if ch.isdigit():
+                    num += ch
+                else:
+                    break
+            out.append(int(num) if num else 0)
+        return tuple(out) or (0,)
+
+    def _fetch_latest_release(self, timeout=6):
+        """(tag, html_url) of the newest GitHub release incl. pre-releases; raises
+        on any network/parse error."""
+        import urllib.request
+        import json
+        req = urllib.request.Request(
+            GITHUB_API_RELEASES,
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "RwG-DayZ-Painter-Plugin"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        if not isinstance(data, list) or not data:
+            raise RuntimeError("no releases found")
+        rel = data[0]
+        return (rel.get("tag_name") or rel.get("name") or ""), \
+               (rel.get("html_url") or GITHUB_RELEASES_URL)
+
+    def _check_updates(self, btn=None):
+        if btn is not None:
+            btn.setEnabled(False)
+        self._update_status.setText("Checking GitHub…")
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.processEvents()
+        try:
+            tag, url = self._fetch_latest_release()
+        except Exception as e:
+            self._update_status.setText(
+                "<span style='color:#ff8a8a;'>Couldn't reach GitHub (offline?) - "
+                f"check <a href='{GITHUB_RELEASES_URL}'>Releases</a> manually.</span>")
+            splog.info(f"[RwG] update check failed: {e}")
+            if btn is not None:
+                btn.setEnabled(True)
+            return
+        disp = tag if tag.lower().startswith("v") else "v" + tag
+        latest, cur = self._version_tuple(tag), self._version_tuple(PLUGIN_VERSION)
+        if latest > cur:
+            self._update_status.setText(
+                f"<span style='color:#7ec96a;'>Update available: <b>{disp}</b> "
+                f"(you have v{PLUGIN_VERSION}) - <a href='{url}'>open release</a>.</span>")
+        elif latest == cur:
+            self._update_status.setText(
+                f"<span style='color:#7ec96a;'>Up to date (v{PLUGIN_VERSION}).</span>")
+        else:
+            self._update_status.setText(
+                f"You're ahead of the latest release ({disp}).")
+        if btn is not None:
+            btn.setEnabled(True)
 
     def on_fresnel_editor(self):
         """Visual Fresnel editor: N/K sliders + live reflectance curve, like the
@@ -2605,7 +2757,8 @@ class RwGDock(QtWidgets.QWidget):
                     dt = ["--dtsmdi-mode", "metrough",
                           "--metallic", maps["metallic"], "--roughness", maps["roughness"]]
                 if dt is not None:
-                    args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"]] + dt
+                    args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"],
+                             "--dtsmdi-strength", str(s["dtsmdi_strength"])] + dt
                     det = [maps[k] for k in ("normal", "height") if maps.get(k)]
                     if det:
                         args += ["--dtsmdi-detail"] + det

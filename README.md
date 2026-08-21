@@ -6,7 +6,7 @@ game-ready **DayZ** textures — `_co` / `_ca`, `_nohq`, `_smdi`, `_as`, `_em`,
 editor, all from a dock inside Painter. It even generates the **damage variants**
 (`_worn` / `_damage` / `_destruct` …) for you.
 
-> **Preview · v0.4.3** — feedback and edge cases welcome!
+> **Preview · v0.4.5b** — feedback and edge cases welcome!
 
 ![RwG DayZ Texture Exporter](docs/preview.png)
 

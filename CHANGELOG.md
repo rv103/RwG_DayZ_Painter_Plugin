@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.5b — Preview (2026-08-21)
+
+A follow-up to v0.4.3: a detail-strength control, a tidier Maps / Export layout,
+a `.tga` default, and a refreshed Help with a GitHub version check.
+
+### Maps
+
+- **`_dtsmdi` detail-strength slider.** A **Detail (R)** slider scales how
+  pronounced the `_dtsmdi` detail is. It only changes the amplitude around **0.5**
+  — the map stays centred on 0.5 (BI's "average 0.5, fades in the mipmaps" rule),
+  so higher just means crisper detail, not a brightness shift. Enabled only when
+  `_dtsmdi` is ticked; wired through the CLI (`--dtsmdi-strength`) too.
+- **Inline slider layout.** `_dtsmdi` now sits directly under `_smdi`, and each
+  map's tuning sliders sit **inline on its own row**, in the gap between the
+  source dropdown and the size box — the **G / B** sliders on the `_smdi` row, the
+  **Detail (R)** slider on the `_dtsmdi` row.
+
+### RVMAT / UI
+
+- **`.tga` default.** *Texture paths use* now defaults to **.tga** for new
+  projects (was `.paa`); existing projects keep their saved choice.
+- **Tidier Export section.** The **"Also fill the RVMAT texture fields (NOHQ / AS
+  / SMDI / MC)"** option now sits **above** the export buttons (set it before you
+  export), and the `.tga → .paa` batch tool is separated as a standalone utility.
+- **Refreshed Help + version check.** The **?** help is rewritten for the current
+  feature set and links to the **GitHub** repo / releases / wiki. A new **Check
+  for updates** button compares the installed version against the latest GitHub
+  release (pre-releases included) and points you to it when a newer one exists.
+
 ## v0.4.3 — Preview (2026-08-20)
 
 A maps + UI release: a new `_dtsmdi` map for the Multimaterial shader, live
@@ -38,8 +67,8 @@ layout.
   `_nohq` / `_dtsmdi` ticked used to also write a `_smdi`, because `_dtsmdi`
   supplies the same metallic/roughness inputs the CLI would infer a `_smdi` from.
   The `_smdi` is now built only when its own checkbox is ticked.
-- **Optional RVMAT auto-fill.** New checkbox **"Enter exported textures into the
-  RVMAT (NOHQ / AS / SMDI / MC)"** in the Export card (on by default). Turn it off
+- **Optional RVMAT auto-fill.** New checkbox **"Also fill the RVMAT texture
+  fields (NOHQ / AS / SMDI / MC)"** in the Export card (on by default). Turn it off
   to export the maps only and leave the RVMAT fields untouched; the **Auto-fill
   from export** button still works on demand.
 

@@ -261,6 +261,12 @@ gloss in green / blue:
   source dropdown (Spec+Gloss / Met+Rough / PBR / glTF) and the same **G / B**
   sliders.
 
+A **Detail (R)** slider (next to the SMDI **G** / **B** sliders, active only when
+`_dtsmdi` is ticked) scales *how pronounced* the detail is. It only changes the
+**amplitude** of the detail around 0.5 — the map's average stays **0.5** (BI's
+"average 0.5, fades in the mipmaps" rule), so a higher value just makes the detail
+crisper, never brighter/darker overall. `1.00` = default.
+
 Tick **`_dtsmdi`** on the Maps tab and give it its own resolution; it's written as
 `<prefix>_dtsmdi`. In the `.rvmat` this is the map the Multimaterial shader reads
 in place of the Super shader's `_smdi`.
@@ -304,8 +310,9 @@ The Super-shader stage layout the plugin writes:
 
 Each texture field (**NOHQ / AS / SMDI / MC**) has three icon buttons: **browse**
 (pick a file, stored mod-relative), **open** (view in TexView / default app), and
-**default** (reset to the procedural value). **Texture paths use** picks `.paa`/`.tga`,
-and **Auto-fill from export** fills NOHQ/AS/SMDI with the real exported paths.
+**default** (reset to the procedural value). **Texture paths use** picks `.paa`/`.tga`
+(default `.tga`), and **Auto-fill from export** fills NOHQ/AS/SMDI with the real
+exported paths.
 
 Behind each field is a small **availability light** that checks the disk live:
 **green** = the referenced file exists, **amber** = only the *other* extension is
@@ -716,6 +723,17 @@ transparent and only your marks show. See the `_mc` walkthrough.
 ## Changelog
 
 Latest releases; full history in `CHANGELOG.md`.
+
+### v0.4.5b — Preview (2026-08-21)
+
+**Maps** — a **Detail (R)** strength slider for `_dtsmdi` (scales the detail
+amplitude around a fixed 0.5 mid-point; wired through the CLI too), and an inline
+slider layout: `_dtsmdi` sits under `_smdi`, with the **G / B** and **Detail (R)**
+sliders on their map's own row. **RVMAT / UI** — *Texture paths use* now defaults
+to **.tga**; a tidier Export section (the *Also fill the RVMAT texture fields*
+option above the export buttons, the batch converter separated); and a refreshed
+**?** help with **GitHub** links and a **Check for updates** version check
+(compares against the latest release, pre-releases included).
 
 ### v0.4.3 — Preview (2026-08-20)
 
