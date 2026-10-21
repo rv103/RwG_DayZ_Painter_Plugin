@@ -55,12 +55,13 @@ except ImportError:
 QAction = getattr(QtGui, "QAction", None) or QtWidgets.QAction
 
 # Pure-Python core helpers (no numpy) can run inside Painter.
-from .core import rvmat_writer, paa_tools
+from .core import rvmat_writer, paa_tools, p3d_reader
 from . import shader_sync
+from . import viewer_link
 
 
 PLUGIN_TITLE = "RwG DayZ Texture Exporter"
-PLUGIN_VERSION = "0.5.0b"
+PLUGIN_VERSION = "0.6.0"
 # GitHub project (source, releases, wiki) + the API used for the version check.
 GITHUB_REPO_URL = "https://github.com/rv103/RwG_DayZ_Painter_Plugin"
 GITHUB_RELEASES_URL = GITHUB_REPO_URL + "/releases"
@@ -80,8 +81,8 @@ META_NORMAL_KEY = "normal_format"
 META_SETTINGS_KEY = "settings"
 MINI_BTN = 24          # square size for the small icon helper buttons
 # machine / UI settings that stay global (not saved per project)
-GLOBAL_KEYS = ("python", "imagetopaa", "mateditor", "texview", "drive", "layout_mode",
-               "presets_path", "env_hdri", "env_tone")
+GLOBAL_KEYS = ("python", "imagetopaa", "texview", "drive", "layout_mode",
+               "presets_path", "viewer_exe")
 USER_PRESETS_NAME = "rwg_dayz_user_presets.json"
 USER_FRESNEL_NAME = "rwg_dayz_user_fresnel.json"
 
@@ -100,9 +101,17 @@ release on GitHub.</i></p>
 <b>Setup</b>
 <ul>
 <li><b>Settings</b> (top button): tool paths (Python with Auto-detect, ImageToPAA,
-MatEditor, TexView), the mod <b>Drive</b>, the panel layout, and <b>Prepare DayZ
+TexView, DayZ Material Viewer), the mod <b>Drive</b>, the panel layout, and <b>Prepare DayZ
 channels</b> - adds Emissive + Opacity + User0-User2 (colour) to the active texture set
 (for _em / _ca / _mc). Best baked into a Painter project template.</li>
+<li><b>Model (.p3d)</b>: the Object Builder model this project paints (found by itself next to
+the imported mesh / the .spp, or pick it). <b>Texture set</b> then lists the model's rvmats
+and those of its proxies (stock, handguard, magazine ...); choosing one sets Output folder
+and Prefix, remembered per texture set. The check lines show whether the export lands where
+the model expects it.</li>
+<li><b>DayZ Material Viewer</b>: <b>Send after export</b> reloads the model with the new
+textures, <b>Live material values</b> sends the RVMAT values while you edit (and takes
+edits made in the viewer back), <b>Open in viewer</b> / <b>Send now</b>.</li>
 <li><b>Output folder</b>: best inside your <b>P:\\</b> mod path so the .rvmat gets game-valid paths.</li>
 <li><b>Prefix</b>: file-name base (wall -> wall_co.tga). <b>Use texture set name</b> fills it in.</li>
 </ul>
@@ -115,17 +124,15 @@ channels</b> - adds Emissive + Opacity + User0-User2 (colour) to the active text
 
 <b>Maps</b>
 <ul>
-<li><b>_co</b>: default <b>Base Color - metals keep color</b> (the DayZ colour map
-carries the metal colour; reflectivity rides in the _smdi). Alternatives: <b>Diffuse
-(metals black)</b>, 2D View, Base Color + Specular, Spec/Gloss diffuse (glTF). Tick
+<li><b>_co</b>: the <b>Base Color</b>, unchanged - metals keep their colour. The Super
+shader already takes the reflected part off the direct light and does not reduce the
+ambient light, so a darkened or black-metal _co would apply that twice. Tick
 <b>alpha (_ca)</b> to add an Opacity alpha and write <b>_ca</b> instead (transparent
 materials).</li>
 <li><b>_nohq</b>: <b>DirectX</b> for DayZ - combines normal + height + baked mesh normal
 (never flat). Format is switchable and remembered per project.</li>
-<li><b>_smdi</b>: R=white, G=specular, B=gloss. Its <b>G</b> / <b>B</b> sliders sit
-inline on the _smdi row (1.00 = unchanged) and also drive the _dtsmdi G/B. Source
-dropdown - default <b>Met-&gt;Spec/Gloss (glTF)</b>; also Spec+Gloss (converted maps),
-Met+Rough (flat metal spec), Met+Rough+BaseColor (PBR).</li>
+<li><b>_smdi</b>: R=white, G=specular, B=gloss, built <b>DayZ shader-matched</b> from
+metallic + roughness + base colour (see below); the _dtsmdi G/B are the same.</li>
 <li><b>_dtsmdi</b> (Multimaterial shader): sits right under _smdi. <b>R = a detail
 map</b> (height + baked mesh + normal, centred on 0.5 so it fades in the mipmaps),
 <b>G/B like the _smdi</b>. Its inline <b>Detail (R)</b> slider scales how pronounced
@@ -173,7 +180,10 @@ with a live reflectance-vs-angle graph. <b>Estimate from base color</b> there
 derives a representative N/K from your metal's F0 (metalness workflow).</li>
 <li><b>env</b>: dropdown of the DayZ <code>dz\\data\\data</code> environment maps
 (Stage7); editable for a custom one. Written into the .rvmat.</li>
-<li><b>Open .rvmat in MatEditor</b> + <b>Auto-sync</b>: edits in the editor flow back into the fields.</li>
+<li><b>DayZ Material Viewer</b> (Setup): values edited there flow back into the fields, live.</li>
+<li><b>Live to DayZ In-Game shader</b> / <b>To shader</b>: sends the values to the
+<code>dayz-ingame</code> viewport shader (RwG DayZ SP Shader) of the <b>active texture
+set</b>; a texture set sharing an instance gets its own one ("DayZ &lt;texture set&gt;").</li>
 <li>The panel auto-loads <b>&lt;prefix&gt;.rvmat</b> on startup / when output+prefix change.</li>
 <li><b>Damage variants</b>: pick a material family, then a button (Worn/Damage/Destruct,
 etc.) writes <b>&lt;prefix&gt;&lt;suffix&gt;.rvmat</b> from the current base - identical
@@ -182,24 +192,19 @@ except the MC (Stage3) is swapped to that damage <b>_mc</b>. Same idea as RwG RV
 
 <b>How the _smdi (and _dtsmdi G/B) is calculated</b>
 <p>The DayZ _smdi is packed as <b>R = white (1.0)</b>, <b>G = specular level</b>,
-<b>B = gloss (= 1 - roughness)</b>. All values run 0..1; the plugin writes
-<code>round(value * 255)</code> per channel. The source options only differ
-in where G comes from (B is always <code>1 - Roughness</code>) - the <b>G</b> and
-<b>B</b> sliders (default 1.0) scale each channel afterwards:</p>
+<b>B = gloss</b>, matched to what the game's Super shader does with them
+(RenderDoc-verified): reflection = <code>G x Fresnel(angle)</code> from the rvmat's
+fresnel(N,K) stage, highlight exponent = <code>B x specularPower</code>.</p>
 <ul>
-<li><b>Met-&gt;Spec/Gloss (glTF)</b> - the recommended default, canonical glTF metric:<br>
-<code>G = perceivedBrightness(mix(0.04, baseColor, metallic)) * G-slider</code></li>
-<li><b>Spec+Gloss (convert maps)</b> - uses Painter's converted maps directly.
-Even a Metallic/Roughness project works because Painter converts them:<br>
-<code>G = clamp(Specular * G-slider, 0, 1)</code></li>
-<li><b>Met+Rough (channels)</b> - straight from metallic + roughness with a 0.04
-dielectric base (F0). Metals go to a flat full specular:<br>
-<code>G = clamp((0.04 + 0.96 * Metallic) * G-slider, 0, 1)</code></li>
-<li><b>Met+Rough+BaseColor (PBR)</b> - physically based: each metal gets its own
-reflectance from the (linearised) base-colour luminance, so dull metal stays
-darker than polished. Dielectrics keep the 0.04 floor:<br>
-<code>G = clamp(lerp(0.04, luminance(baseColor), Metallic) * G-slider, 0, 1)</code></li>
+<li><code>F0 = perceivedBrightness(mix(0.04, linear baseColor, metallic))</code></li>
+<li><code>G = F0 / F0(fresnel N,K) x B</code> - the stage already carries F0, so G is
+the fraction of it; x B keeps rough areas from a full-strength highlight.</li>
+<li><code>B = (2 / roughness^4 - 2) / specularPower</code> - the Blinn-Phong exponent
+of the roughness, relative to the rvmat's specularPower.</li>
 </ul>
+<p>So set <b>specularPower</b> and <b>fresnel N/K</b> (RVMAT tab, estimate buttons)
+before exporting. Choose the fresnel of the most reflective material in the texture set (usually the
+metal) - pixels reflecting more than the stage are clipped to G = 1.</p>
 <p>The <b>_dtsmdi</b> uses the same G/B; only its <b>R</b> differs (the detail map).</p>
 
 <p><i>Note: _co is not an rvmat stage in DayZ - it is assigned on the model. The
@@ -319,7 +324,7 @@ def load_settings():
         "co_source": "base_color",
         "smdi_source": "dayz",
         "smdi_green": 1.0, "smdi_blue": 1.0, "dtsmdi_strength": 1.0,
-        "preset": "Default", "mateditor": "", "texview": "", "autosync": True,
+        "preset": "Default", "texview": "",
         "mode": "builtin", "painter_preset": "DayZ", "preset_shelf": "your_assets",
         "tex_ext": "tga",
         "mat_ambient": "1,1,1,1", "mat_diffuse": "1,1,1,1",
@@ -328,10 +333,11 @@ def load_settings():
         "mat_fresnel_n": "0.4", "mat_fresnel_k": "0.2",
         "fresnel_fmt": "ai", "fresnel_w": "64", "fresnel_h": "64", "fresnel_levels": "1",
         "env": "",
-        "env_hdri": "",
-        "env_tone": "ACES",
         "layout_mode": "tabs",
         "presets_path": "",
+        # DayZ Material Viewer link (model per project, viewer path global)
+        "viewer_p3d": "", "viewer_send_export": True, "viewer_live": True, "viewer_exe": "",
+        "ts_materials": {},             # texture set name -> rvmat of the model (or a proxy)
     }
     # global machine/UI keys come from the shared file (tool paths, layout)
     try:
@@ -597,11 +603,21 @@ def detect_python():
 # --------------------------------------------------------------------------- #
 #  Painter export                                                              #
 # --------------------------------------------------------------------------- #
+def _api_value(obj, attr):
+    """obj.attr as a value: Painter 2026 turned several getters (TextureSet.name ...)
+    into properties and warns on every call of the old method, older versions only
+    have the method."""
+    v = getattr(obj, attr)
+    if isinstance(v, str) or not callable(v):
+        return str(v) if isinstance(v, str) else v
+    return v()
+
+
 def _texture_set_names():
     names = []
     try:
         if sptexset and hasattr(sptexset, "all_texture_sets"):
-            names = [ts.name() for ts in sptexset.all_texture_sets()]
+            names = [_api_value(ts, "name") for ts in sptexset.all_texture_sets()]
     except Exception as e:
         splog.warning(f"[RwG] Could not list texture sets: {e}")
     return names
@@ -615,11 +631,11 @@ def _active_texture_set_name():
             if stack is not None:
                 for getter in ("material", "texture_set"):
                     if hasattr(stack, getter):
-                        ts = getattr(stack, getter)()
+                        ts = _api_value(stack, getter)
                         if ts is not None and hasattr(ts, "name"):
-                            return ts.name()
+                            return _api_value(ts, "name")
                 if hasattr(stack, "name"):
-                    return stack.name()
+                    return _api_value(stack, "name")
     except Exception as e:
         splog.warning(f"[RwG] Could not get active texture set: {e}")
     names = _texture_set_names()
@@ -889,8 +905,6 @@ class RwGDock(QtWidgets.QWidget):
         self.setWindowTitle(PLUGIN_TITLE)
         self.s = load_settings()
         self.rvmat_path = None
-        self.watcher = QtCore.QFileSystemWatcher()
-        self.watcher.fileChanged.connect(self._on_rvmat_changed)
         self._build()
         self._subscribe_project_events()
 
@@ -928,22 +942,29 @@ class RwGDock(QtWidgets.QWidget):
         except Exception as e:
             splog.warning(f"[RwG] Project-event refresh failed: {e}")
 
+    def _dp(self, path):
+        """Work-drive form of a path (P:\\MyMod\\... instead of the real folder a file
+        dialog may return for a subst drive or a mod linked into it)."""
+        if not path:
+            return path
+        return paa_tools.to_drive_path(path, self.s.get("drive", "P:\\").strip() or "P:\\")
+
     # ---------- small builders ----------
     def _path_row(self, layout, label, key, is_dir=False):
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel(label))
-        edit = QtWidgets.QLineEdit(self.s.get(key, ""))
+        edit = QtWidgets.QLineEdit(self._dp(self.s.get(key, "")))
         row.addWidget(edit)
         btn = QtWidgets.QPushButton("...")
         btn.setFixedWidth(30)
 
         def browse():
             if is_dir:
-                p = QtWidgets.QFileDialog.getExistingDirectory(self, label)
+                p = QtWidgets.QFileDialog.getExistingDirectory(self, label, edit.text())
             else:
-                p, _ = QtWidgets.QFileDialog.getOpenFileName(self, label)
+                p, _ = QtWidgets.QFileDialog.getOpenFileName(self, label, edit.text())
             if p:
-                edit.setText(p)
+                edit.setText(self._dp(p))
         btn.clicked.connect(browse)
         row.addWidget(btn)
         layout.addLayout(row)
@@ -955,7 +976,7 @@ class RwGDock(QtWidgets.QWidget):
         else:
             p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select file")
         if p:
-            edit.setText(p)
+            edit.setText(self._dp(p))
 
     def _res_combo(self, key, default):
         c = QtWidgets.QComboBox()
@@ -963,19 +984,6 @@ class RwGDock(QtWidgets.QWidget):
         c.setCurrentText(str(self.s.get(key, default)))
         c.setFixedWidth(70)
         return c
-
-    def _preview_btn(self, kind):
-        """Small eye button on a map row: previews that map in Painter."""
-        b = QtWidgets.QPushButton()
-        b.setObjectName("mini")
-        b.setIcon(self._icon("eye"))
-        b.setIconSize(QtCore.QSize(14, 14))
-        b.setFixedSize(MINI_BTN, MINI_BTN)
-        b.setToolTip(f"Preview _{kind} in Painter — builds it from the current "
-                     "project and loads it into a spare User channel (pick that "
-                     "channel in the 2D view).")
-        b.clicked.connect(lambda: self.on_preview_map(kind))
-        return b
 
     def _labeled_slider(self, caption, key, default):
         """0.00-2.00 horizontal slider with a caption and a live value label.
@@ -1014,7 +1022,7 @@ class RwGDock(QtWidgets.QWidget):
         top.addWidget(title)
         top.addStretch(1)
         settings_btn = QtWidgets.QPushButton("Settings")
-        settings_btn.setToolTip("Tool paths: Python, ImageToPAA, MatEditor")
+        settings_btn.setToolTip("Tool paths: Python, ImageToPAA, DayZ Material Viewer")
         settings_btn.clicked.connect(self.on_settings)
         top.addWidget(settings_btn)
         help_btn = QtWidgets.QPushButton("?")
@@ -1061,16 +1069,20 @@ class RwGDock(QtWidgets.QWidget):
             if not single:
                 page_layout.addStretch(1)
 
-        def header(txt):
+        def header(txt, row=None, stretch=1):
             # each section is a bordered "card" (QGroupBox) with a green title;
             # widgets added afterwards land inside it via the reassigned `layout`.
+            # `row`: a QHBoxLayout to put the card next to others instead of below.
             nonlocal layout
             box = QtWidgets.QGroupBox(txt)
             box.setObjectName("section")
             inner = QtWidgets.QVBoxLayout(box)
             inner.setContentsMargins(10, 8, 10, 8)
             inner.setSpacing(3)
-            page_layout.addWidget(box)
+            if row is not None:
+                row.addWidget(box, stretch)
+            else:
+                page_layout.addWidget(box)
             layout = inner
 
         def hint(txt):
@@ -1082,6 +1094,41 @@ class RwGDock(QtWidgets.QWidget):
 
         # --- Setup tab ---
         header("Setup")
+        # model first: the P3D says which rvmat / _co each texture set has to produce
+        vrow = QtWidgets.QHBoxLayout()
+        vrow.addWidget(QtWidgets.QLabel("Model (.p3d):"))
+        self.viewer_p3d_edit = QtWidgets.QLineEdit(self._dp(self.s.get("viewer_p3d", "")))
+        self.viewer_p3d_edit.setPlaceholderText("auto: found from the Painter mesh / project / output folder")
+        self.viewer_p3d_edit.setToolTip(
+            "The Object Builder model (MLOD) this project paints. The plugin reads which\n"
+            ".rvmat and _co texture its faces use - including proxies (stock, handguard,\n"
+            "magazine ...) - and fills Output folder and Prefix for each texture set.\n"
+            "Empty = found automatically next to the mesh Painter imported or the .spp.")
+        self.viewer_p3d_edit.editingFinished.connect(lambda: self._load_model_materials())
+        vrow.addWidget(self.viewer_p3d_edit)
+        vb = QtWidgets.QPushButton("...")
+        vb.setFixedWidth(30)
+        vb.clicked.connect(self.on_browse_viewer_p3d)
+        vrow.addWidget(vb)
+        layout.addLayout(vrow)
+        trow = QtWidgets.QHBoxLayout()
+        self.ts_label = QtWidgets.QLabel("Texture set:")
+        trow.addWidget(self.ts_label)
+        self.ts_mat_combo = QtWidgets.QComboBox()
+        self.ts_mat_combo.setToolTip(
+            "Which material of the model the active texture set paints. Sets Output folder\n"
+            "(the rvmat's folder) and Prefix (its name), remembered per texture set.")
+        self.ts_mat_combo.activated.connect(self._on_ts_material_chosen)
+        trow.addWidget(self.ts_mat_combo, 1)
+        rb = QtWidgets.QPushButton("⟳")
+        rb.setFixedWidth(30)
+        rb.setToolTip("Read the model again (after changing it in Object Builder).")
+        rb.clicked.connect(lambda: self._load_model_materials(announce=True))
+        trow.addWidget(rb)
+        layout.addLayout(trow)
+        self.path_check = hint("")
+        self.path_check.setTextFormat(QtCore.Qt.RichText)
+
         self.output_edit = self._path_row(layout, "Output folder:", "output", is_dir=True)
 
         prow = QtWidgets.QHBoxLayout()
@@ -1093,9 +1140,9 @@ class RwGDock(QtWidgets.QWidget):
         prow.addWidget(btn_ts)
         layout.addLayout(prow)
 
-        # re-detect the .rvmat when output/prefix change
-        self.output_edit.editingFinished.connect(lambda: self._detect_rvmat())
-        self.prefix_edit.editingFinished.connect(lambda: self._detect_rvmat())
+        # re-detect the .rvmat when output/prefix change, and re-check them against the model
+        self.output_edit.editingFinished.connect(lambda: (self._detect_rvmat(), self._update_path_check()))
+        self.prefix_edit.editingFinished.connect(lambda: (self._detect_rvmat(), self._update_path_check()))
 
         # export mode
         mrow = QtWidgets.QHBoxLayout()
@@ -1118,10 +1165,48 @@ class RwGDock(QtWidgets.QWidget):
         hint("Built-in = plugin builds the maps.   "
              "Painter preset = run your own DayZ output template as-is.")
 
+        # live link to the DayZ Material Viewer
+        header("DayZ Material Viewer  (live preview)")
+        orow = QtWidgets.QHBoxLayout()
+        self.viewer_export_cb = QtWidgets.QCheckBox("Send after export")
+        self.viewer_export_cb.setChecked(self.s.get("viewer_send_export", True))
+        self.viewer_export_cb.setToolTip("After every export, tell the viewer which textures "
+                                         "and .rvmat were written - it reloads them at once.")
+        orow.addWidget(self.viewer_export_cb)
+        self.viewer_live_cb = QtWidgets.QCheckBox("Live material values")
+        self.viewer_live_cb.setChecked(self.s.get("viewer_live", True))
+        self.viewer_live_cb.setToolTip(
+            "Send the RVMAT tab's material values (ambient, diffuse, specular, power,\n"
+            "fresnel ...) to the viewer while you edit them - no export or save needed.\n"
+            "The viewer applies them to every face using <prefix>.rvmat.\n"
+            "Both ways: values edited in the viewer's material panel come back into\n"
+            "these fields (and so into the DayZ In-Game shader); Write .rvmat saves them.")
+        self.viewer_live_cb.toggled.connect(lambda on: on and self._push_viewer(announce=True))
+        orow.addWidget(self.viewer_live_cb)
+        orow.addStretch(1)
+        layout.addLayout(orow)
+        brow = QtWidgets.QHBoxLayout()
+        open_btn = QtWidgets.QPushButton("Open in viewer")
+        open_btn.setToolTip("Start the DayZ Material Viewer with the model (path in Settings)\n"
+                            "if it is not running, then send the model and material.")
+        open_btn.clicked.connect(self.on_open_viewer)
+        brow.addWidget(open_btn)
+        send_btn = QtWidgets.QPushButton("Send now")
+        send_btn.setToolTip("Send the model, the current textures in the output folder and\n"
+                            "the material values to the running viewer (no export).")
+        send_btn.clicked.connect(lambda: self._push_viewer(announce=True, with_files=True))
+        brow.addWidget(send_btn)
+        brow.addStretch(1)
+        layout.addLayout(brow)
+
         # --- Maps tab ---
         end_page()
         page_layout = maps_layout
-        header("Maps  (built-in mode: tick = export, size per map)")
+        # Maps and Export side by side
+        maps_row = QtWidgets.QHBoxLayout()
+        maps_row.setSpacing(6)
+        page_layout.addLayout(maps_row)
+        header("Maps  (built-in mode: tick = export, size per map)", row=maps_row, stretch=3)
 
         grid = QtWidgets.QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -1139,26 +1224,14 @@ class RwGDock(QtWidgets.QWidget):
         # _co
         self.co_cb = QtWidgets.QCheckBox("_co")
         self.co_cb.setChecked(self.s.get("co_on", True))
-        self.co_source = QtWidgets.QComboBox()
-        self.co_source.addItems(["Base Color - metals keep color (recommended)",
-                                 "Diffuse (metals black)", "2D View", "Base Color + Specular",
-                                 "Spec/Gloss diffuse, glTF (metals black)"])
+        self.co_source = QtWidgets.QLabel("Base Color")
         self.co_source.setToolTip(
-            "How the _co is built. Key question: does the metal colour stay in the _co,\n"
-            "or go black (then the metal look rides on specular[] + fresnel + env)?\n"
-            "  Diffuse - Painter's metal/rough diffuse: metals go BLACK.\n"
-            "  2D View - the flattened 2D viewport.\n"
-            "  Base Color - raw albedo: metals KEEP their colour (recommended).\n"
-            "  Base Color + Specular - albedo dimmed by specular; metals keep colour.\n"
-            "  Spec/Gloss diffuse (glTF) - canonical baseColor*(1-0.04)*(1-metallic): "
-            "metals black, dielectrics keep 96%.")
-        self.co_source.setCurrentText({"diffuse": "Diffuse (metals black)",
-                                       "2d_view": "2D View",
-                                       "base_color": "Base Color - metals keep color (recommended)",
-                                       "base_color_specular": "Base Color + Specular",
-                                       "specgloss": "Spec/Gloss diffuse, glTF (metals black)"}.get(
-                                           self.s.get("co_source", "base_color"),
-                                           "Base Color - metals keep color (recommended)"))
+            "_co = Painter's base colour, unchanged - metals keep their colour.\n"
+            "Matches the Super shader: it already takes the reflected part off the direct\n"
+            "light (diffuse x (1 - Fresnel x _smdi G)), and the ambient light is NOT reduced -\n"
+            "a black metal _co would go black in shade. Darkening the _co (Diffuse, glTF\n"
+            "spec/gloss, Base Color + Specular) or baking light into it (2D View) applies\n"
+            "the same thing twice.")
         # alpha toggle: off = _co, on = _ca (same source, plus an Opacity alpha)
         self.co_alpha_cb = QtWidgets.QCheckBox("alpha (_ca)")
         self.co_alpha_cb.setChecked(self.s.get("co_alpha", False))
@@ -1186,54 +1259,21 @@ class RwGDock(QtWidgets.QWidget):
         # _smdi
         self.smdi_cb = QtWidgets.QCheckBox("_smdi")
         self.smdi_cb.setChecked(self.s.get("smdi_on", True))
-        self.smdi_source = QtWidgets.QComboBox()
-        self.smdi_source.addItems(["DayZ shader-matched (recommended)",
-                                   "Met->Spec/Gloss, glTF",
-                                   "Spec+Gloss (converted maps)", "Met+Rough (flat metal spec)",
-                                   "Met+Rough+BaseColor, PBR (per-metal spec)"])
-        self.smdi_source.setCurrentText(
-            {"dayz": "DayZ shader-matched (recommended)",
-             "metrough": "Met+Rough (flat metal spec)",
-             "pbr": "Met+Rough+BaseColor, PBR (per-metal spec)",
-             "gltf": "Met->Spec/Gloss, glTF"}.get(
-                self.s.get("smdi_source"), "Spec+Gloss (converted maps)"))
+        self.smdi_source = QtWidgets.QLabel("DayZ shader-matched")
         self.smdi_source.setToolTip(
-            "How the _smdi (specular level + gloss) is built:\n"
-            "  DayZ shader-matched, recommended - measured against the game's Super shader: "
-            "G = the pixel's F0 relative to the rvmat fresnel stage (which already carries "
-            "F0), times gloss; B = GGX-equivalent exponent / specularPower. Uses the "
-            "specularPower and fresnel N/K from the Material panel - set specularPower with "
-            "its estimate button first.\n"
-            "  Spec+Gloss (converted maps) - Painter's converted Specular + Glossiness. "
-            "Works in a Metallic/Roughness project too (Painter converts them).\n"
-            "  Met+Rough (flat metal spec) - built straight from your metallic + roughness "
-            "channels; every metal goes to a flat full specular.\n"
-            "  Met+Rough+BaseColor, PBR (per-metal spec) - physically-based: each metal gets "
-            "its own reflectance from the base-colour luminance (dull metal stays darker than "
-            "polished). Dielectrics keep the 0.04 floor.\n"
-            "  Met->Spec/Gloss (glTF) - the canonical glTF conversion: G = perceived "
-            "brightness of mix(0.04, baseColor, metallic). Like PBR, canonical metric. "
-            "(The non-DayZ methods write F0 into G, which the shader multiplies with the "
-            "fresnel stage again - reflections come out much weaker than intended.)")
+            "_smdi from metallic + roughness + base colour, matched to the game's Super shader\n"
+            "(RenderDoc-verified):\n"
+            "  G = the pixel's F0 / F0 of the rvmat's fresnel(N,K) stage - the shader multiplies\n"
+            "      G with that stage, so it must not carry F0 itself; x B so rough areas do not\n"
+            "      get a full-strength highlight (its peak follows the rvmat specularPower).\n"
+            "  B = Blinn-Phong exponent of the roughness (2/r^4 - 2) / specularPower - the\n"
+            "      shader uses B x specularPower as the exponent.\n"
+            "Uses specularPower and fresnel N/K of the RVMAT tab - set them (estimate buttons)\n"
+            "before exporting. Writing F0 straight into G (Met+Rough, PBR, glTF, Spec+Gloss)\n"
+            "makes non-metals ~25x too dull.")
         self.smdi_res = self._res_combo("smdi_res", "2048")
-        # _smdi - the G (specular) / B (gloss) sliders sit inline on this row, in
-        # the gap between the source dropdown and the size combo. They also scale
-        # the _dtsmdi G/B, so they stay always available.
-        smdi_mid = QtWidgets.QHBoxLayout()
-        smdi_mid.setSpacing(6)
-        smdi_mid.addWidget(self.smdi_source)
-        smdi_mid.addSpacing(10)
-        g_cap, self.smdi_green, g_val = self._labeled_slider("G", "smdi_green", 1.0)
-        smdi_mid.addWidget(g_cap)
-        smdi_mid.addWidget(self.smdi_green, 1)
-        smdi_mid.addWidget(g_val)
-        smdi_mid.addSpacing(10)
-        b_cap, self.smdi_blue, b_val = self._labeled_slider("B", "smdi_blue", 1.0)
-        smdi_mid.addWidget(b_cap)
-        smdi_mid.addWidget(self.smdi_blue, 1)
-        smdi_mid.addWidget(b_val)
         grid.addWidget(self.smdi_cb, 3, 0)
-        grid.addLayout(smdi_mid, 3, 1)
+        grid.addLayout(middle(self.smdi_source), 3, 1)
         grid.addWidget(self.smdi_res, 3, 2)
 
         # _dtsmdi (Detail + SMDI) - directly under _smdi; for the Multimaterial
@@ -1244,10 +1284,9 @@ class RwGDock(QtWidgets.QWidget):
         self.dtsmdi_cb.setToolTip(
             "Detail + SMDI map for the DayZ Multimaterial shader.\n"
             "  R = a fine detail map from height + baked mesh + normal (avg ~0.5)\n"
-            "  G = specular level, B = gloss  - built exactly like the _smdi above\n"
-            "     (uses the same _smdi method + the G/B sliders).\n"
-            "Needs metallic + roughness (+ base colour for the glTF/PBR method);\n"
-            "the normal supplies the detail. Written as <prefix>_dtsmdi.")
+            "  G = specular level, B = gloss  - built exactly like the _smdi above.\n"
+            "Needs metallic + roughness + base colour; the normal supplies the\n"
+            "detail. Written as <prefix>_dtsmdi.")
         self.dtsmdi_res = self._res_combo("dtsmdi_res", "2048")
         dt_mid = QtWidgets.QHBoxLayout()
         dt_mid.setSpacing(6)
@@ -1325,58 +1364,43 @@ class RwGDock(QtWidgets.QWidget):
                               "a:", self.mc_alpha), 7, 1)
         grid.addWidget(self.mc_res, 7, 2)
 
-        # per-map preview (col 3): an eye button on every map row that loads that
-        # map into a spare User channel for inspection in Painter's 2D view, plus
-        # a clear button in the header row.
-        pv_clear = QtWidgets.QPushButton("✕")
-        pv_clear.setObjectName("mini")
-        pv_clear.setFixedSize(MINI_BTN, MINI_BTN)
-        pv_clear.setToolTip("Remove the map preview layer from Painter.")
-        pv_clear.clicked.connect(self.on_clear_preview)
-        grid.addWidget(pv_clear, 0, 3, QtCore.Qt.AlignHCenter)
-        for _r, _k in ((1, "co"), (2, "nohq"), (3, "smdi"), (4, "dtsmdi"),
-                       (5, "as"), (6, "em"), (7, "mc")):
-            grid.addWidget(self._preview_btn(_k), _r, 3)
-
         layout.addLayout(grid)
 
-        hint("SMDI tuning: G scales specular, B scales gloss (1.00 = unchanged); "
-             "Detail sets the _dtsmdi detail strength.   The eye button on each map "
-             "row previews it in Painter; ✕ removes the preview.")
+        hint("Detail sets the _dtsmdi detail strength (Multimaterial shader).")
 
-        # --- paa + export ---
-        header("Export  (.tga is always written; .paa optional)")
+        # --- paa + export (next to Maps) ---
+        header("Export", row=maps_row, stretch=1)
+        hint(".tga is always written; .paa optional.")
 
         # Export option (applies to the buttons below): after an export, also
         # write the produced texture paths into the RVMAT NOHQ/AS/SMDI/MC fields.
         # Off => export textures only, leave the rvmat untouched (you can still
         # fill it later with "Auto-fill from export" on the RVMAT tab).
-        self.autofill_cb = QtWidgets.QCheckBox(
-            "Also fill the RVMAT texture fields (NOHQ / AS / SMDI / MC)")
+        self.autofill_cb = QtWidgets.QCheckBox("Fill RVMAT texture fields")
         self.autofill_cb.setChecked(self.s.get("autofill_on_export", True))
         self.autofill_cb.setToolTip(
-            "On  - after an export, fill the RVMAT texture paths with what was\n"
-            "      just exported (the old behaviour).\n"
+            "On  - after an export, fill the RVMAT texture paths (NOHQ / AS / SMDI / MC)\n"
+            "      with what was just exported.\n"
             "Off - export the textures only and leave the RVMAT fields alone;\n"
             "      use this when you just want the maps, not an rvmat update.\n"
             "The 'Auto-fill from export' button on the RVMAT tab always works\n"
             "regardless of this checkbox.")
         layout.addWidget(self.autofill_cb)
 
-        b1 = QtWidgets.QHBoxLayout()
-        for text, fn in (("Export .tga", lambda: self._do_export(False)),
-                         ("Export .tga + .paa", lambda: self._do_export(True)),
-                         ("Export .paa", lambda: self._do_export(True))):
+        # stacked: the Export card is the narrow column next to Maps
+        for text, fn in (("Export .tga + .paa", lambda: self._do_export(True)),
+                         ("Export .tga only", lambda: self._do_export(False))):
             btn = QtWidgets.QPushButton(text)
             if text == "Export .tga + .paa":
                 btn.setObjectName("primary")
             btn.clicked.connect(fn)
-            b1.addWidget(btn)
-        layout.addLayout(b1)
+            layout.addWidget(btn)
+        layout.addStretch(1)
 
         # standalone batch utility - convert an existing folder of .tga to .paa
-        conv_hint = QtWidgets.QLabel("Batch tool \u2014 independent of the export above:")
+        conv_hint = QtWidgets.QLabel("Batch tool, independent of the export:")
         conv_hint.setStyleSheet("color:#9aa0a6;")
+        conv_hint.setWordWrap(True)
         layout.addWidget(conv_hint)
         folder_btn = QtWidgets.QPushButton("Convert .tga \u2192 .paa (folder)")
         folder_btn.clicked.connect(self.on_convert_folder_paa)
@@ -1558,65 +1582,28 @@ class RwGDock(QtWidgets.QWidget):
                                   "(the reflection cubemap under dz\\data\\data). "
                                   "Editable if you use a custom one.")
         erow.addWidget(self.env_combo)
-        hdri_btn = QtWidgets.QPushButton("HDRI")
-        hdri_btn.setToolTip(
-            "Load an equirectangular HDRI as Painter's viewport environment, to\n"
-            "match the in-game lighting while you paint (separate from the rvmat\n"
-            "env above, which is the game's reflection map).\n"
-            "Click loads the saved HDRI; Shift-click picks a different one.")
-        hdri_btn.clicked.connect(self.on_load_env_hdri)
-        erow.addWidget(hdri_btn)
-        dayz_env_btn = QtWidgets.QPushButton("DayZ env…")
-        dayz_env_btn.setToolTip(
-            "Reproject a DayZ env image (hemisphere-in-plane) to an "
-            "equirectangular\npanorama and load it as the viewport environment "
-            "— pick the projection\nmodel by eye in the dialog.")
-        dayz_env_btn.clicked.connect(self.on_dayz_env_dialog)
-        erow.addWidget(dayz_env_btn)
         layout.addLayout(erow)
-
-        # viewport look: tone mapping + one-click DayZ env
-        crow = QtWidgets.QHBoxLayout()
-        crow.addWidget(QtWidgets.QLabel("Viewport tone:"))
-        self.tone_cb = QtWidgets.QComboBox()
-        self.tone_cb.addItems(["ACES", "Linear"])
-        self.tone_cb.setCurrentText(self.s.get("env_tone", "ACES"))
-        self.tone_cb.setToolTip("Painter viewport tone mapping. ACES = filmic "
-                                "(closer to the in-game look); Linear = raw.")
-        self.tone_cb.currentTextChanged.connect(self.on_set_tone)   # after setCurrentText
-        crow.addWidget(self.tone_cb)
-        crow.addSpacing(12)
-        dz_look = QtWidgets.QPushButton("DayZ look")
-        dz_look.setToolTip(
-            "One click: build the saved DayZ env panorama, load it as the "
-            "viewport\nenvironment and set ACES tone mapping. (Pick the env once "
-            "via 'DayZ env…'.\nThe RwG DayZ Super viewport shader is still "
-            "assigned manually in\nTexture Set Settings.)")
-        dz_look.clicked.connect(self.on_dayz_look)
-        crow.addWidget(dz_look)
-        crow.addStretch(1)
-        layout.addLayout(crow)
 
         # link to the DayZ In-Game viewport shader (dayz-ingame.glsl)
         srow = QtWidgets.QHBoxLayout()
         self.shader_link_cb = QtWidgets.QCheckBox("Live to DayZ In-Game shader")
         self.shader_link_cb.setChecked(self.s.get("shader_link", True))
         self.shader_link_cb.setToolTip(
-            "Send the material values above (and the _smdi method, G/B sliders and\n"
-            "macro source) to every texture set using the 'dayz-ingame' viewport\n"
-            "shader, live while you edit - the viewport shows what this .rvmat\n"
-            "will look like in game.")
+            "Send the material values above (and the macro source) to the 'dayz-ingame'\n"
+            "viewport shader of the ACTIVE texture set, live while you edit - the viewport\n"
+            "shows what this .rvmat will look like in game. Texture sets sharing one shader\n"
+            "instance get their own copy ('DayZ <texture set>'), since each paints its own .rvmat.")
         self.shader_link_cb.toggled.connect(lambda on: on and self._push_shader(announce=True))
         srow.addWidget(self.shader_link_cb)
-        pull_btn = QtWidgets.QPushButton("From shader")
-        pull_btn.setToolTip("Take the values set in the DayZ In-Game shader's settings "
-                            "into the fields above.")
-        pull_btn.clicked.connect(self.on_pull_shader)
-        srow.addWidget(pull_btn)
+        push_btn = QtWidgets.QPushButton("To shader")
+        push_btn.setToolTip("Send the material values above (and the macro source) to the\n"
+                            "'dayz-ingame' viewport shader of the active texture set now.")
+        push_btn.clicked.connect(lambda: self._push_shader(announce=True))
+        srow.addWidget(push_btn)
         srow.addStretch(1)
         layout.addLayout(srow)
 
-        header("Write")           # write / load / MatEditor buttons in their own card
+        header("Write")           # write / load buttons in their own card
 
         wrow = QtWidgets.QHBoxLayout()
         write_btn = QtWidgets.QPushButton("Write .rvmat")
@@ -1640,15 +1627,6 @@ class RwGDock(QtWidgets.QWidget):
         val_btn.clicked.connect(self.on_validate_rvmat)
         wrow.addWidget(val_btn)
         layout.addLayout(wrow)
-
-        m1 = QtWidgets.QHBoxLayout()
-        open_btn = QtWidgets.QPushButton("Open .rvmat in MatEditor")
-        open_btn.clicked.connect(self.on_open_mateditor)
-        m1.addWidget(open_btn)
-        self.autosync_cb = QtWidgets.QCheckBox("Auto-sync from MatEditor")
-        self.autosync_cb.setChecked(self.s.get("autosync", True))
-        m1.addWidget(self.autosync_cb)
-        layout.addLayout(m1)
 
         # --- damage variants (adds an _mc, like RwG RVMat Speedo) ---
         header("Damage variants  (base .rvmat + damage _mc)")
@@ -1702,10 +1680,6 @@ class RwGDock(QtWidgets.QWidget):
                                "normal channel + height + baked mesh normal.",
             self.nohq_res: "Output resolution for _nohq.",
             self.smdi_cb: "Export the _smdi (specular) map.",
-            self.smdi_green: "Scales the _smdi Green (specular level). "
-                             "Drag right to boost specular. 1.00 = unchanged.",
-            self.smdi_blue: "Scales the _smdi Blue (gloss = 1 - roughness). "
-                            "1.00 = unchanged.",
             self.smdi_res: "Output resolution for _smdi.",
             self.dtsmdi_cb: "Export the _dtsmdi (Detail + SMDI) for the "
                             "Multimaterial shader. R = detail, G/B like _smdi.",
@@ -1723,8 +1697,6 @@ class RwGDock(QtWidgets.QWidget):
                               "instead - for transparent materials.",
             self.preset_combo: "Material preset for the .rvmat "
                                "(ambient/diffuse/specular/power + fresnel).",
-            self.autosync_cb: "When the material editor saves the .rvmat, read the "
-                              "changes back into this panel.",
         }
         for widget, tip in tips.items():
             try:
@@ -1743,6 +1715,7 @@ class RwGDock(QtWidgets.QWidget):
         self._update_mode_fields()
         self._detect_rvmat()
         self._wire_shader_link()
+        self._load_model_materials()
 
     def _labeled_edit(self, layout, label):
         row = QtWidgets.QHBoxLayout()
@@ -2012,11 +1985,12 @@ class RwGDock(QtWidgets.QWidget):
 
     # ---------- state ----------
     def _collect(self):
-        src_map = {"Diffuse (metals black)": "diffuse", "2D View": "2d_view",
-                   "Base Color - metals keep color (recommended)": "base_color",
-                   "Base Color + Specular": "base_color_specular",
-                   "Spec/Gloss diffuse, glTF (metals black)": "specgloss"}
-        # python / imagetopaa / mateditor live in the Settings dialog (self.s)
+        # python / imagetopaa / viewer_exe live in the Settings dialog (self.s)
+        # paths typed or pasted as the real folder behind P: are shown in P: form
+        for edit in (self.output_edit, self.viewer_p3d_edit):
+            fixed = self._dp(edit.text().strip())
+            if fixed and fixed != edit.text():
+                edit.setText(fixed)
         self.s.update({
             "output": self.output_edit.text(),
             "prefix": self.prefix_edit.text(),
@@ -2033,23 +2007,19 @@ class RwGDock(QtWidgets.QWidget):
             "co_res": self.co_res.currentText(), "nohq_res": self.nohq_res.currentText(),
             "smdi_res": self.smdi_res.currentText(), "as_res": self.as_res.currentText(),
             "em_res": self.em_res.currentText(), "mc_res": self.mc_res.currentText(),
-            "co_source": src_map.get(self.co_source.currentText(), "base_color"),
-            "smdi_source": ("dayz" if self.smdi_source.currentText().startswith("DayZ")
-                            else "gltf" if "glTF" in self.smdi_source.currentText()
-                            else "pbr" if "PBR" in self.smdi_source.currentText()
-                            else "metrough" if self.smdi_source.currentText().startswith("Met")
-                            else "specgloss"),
-            "smdi_green": self.smdi_green.value() / 100.0,
-            "smdi_blue": self.smdi_blue.value() / 100.0,
+            # the only conversions that match the Super shader (see the tooltips)
+            "co_source": "base_color",
+            "smdi_source": "dayz",
+            # no G/B scaling: it would break the shader match of the _smdi
+            "smdi_green": 1.0,
+            "smdi_blue": 1.0,
             # rvmat values the DayZ _smdi method is relative to (Material panel)
             "dayz_rvmat": self._dayz_rvmat_args(),
             "dtsmdi_strength": self.dtsmdi_strength.value() / 100.0,
             "preset": self._selected_builtin_preset(),
-            "autosync": self.autosync_cb.isChecked(),
             "mode": "preset" if self.mode_combo.currentText() == "Painter preset" else "builtin",
             "painter_preset": self.painter_preset_edit.text(),
             "preset_shelf": self.preset_shelf_edit.text(),
-            "mateditor": self.s.get("mateditor", ""),
             "tex_ext": self.tex_ext_combo.currentText().lstrip("."),
             "mat_ambient": self.mat_ambient.text(), "mat_diffuse": self.mat_diffuse.text(),
             "mat_forced": self.mat_forced.text(), "mat_emmisive": self.mat_emmisive.text(),
@@ -2058,6 +2028,9 @@ class RwGDock(QtWidgets.QWidget):
             "mat_fresnel_k": self.mat_fresnel_k.text(),
             "env": self.env_combo.currentText().strip(),
             "shader_link": self.shader_link_cb.isChecked(),
+            "viewer_p3d": self.viewer_p3d_edit.text().strip(),
+            "viewer_send_export": self.viewer_export_cb.isChecked(),
+            "viewer_live": self.viewer_live_cb.isChecked(),
         })
         save_settings(self.s)
         return self.s
@@ -2065,86 +2038,281 @@ class RwGDock(QtWidgets.QWidget):
     # ---------- DayZ In-Game shader link ----------
     def _wire_shader_link(self):
         """Push to the viewport shader whenever a linked value changes (debounced)."""
-        self._shader_pulling = False
         self._shader_timer = QtCore.QTimer(self)
         self._shader_timer.setSingleShot(True)
         self._shader_timer.setInterval(150)
         self._shader_timer.timeout.connect(self._push_shader)
-        kick = lambda *_: (self.shader_link_cb.isChecked() and not self._shader_pulling
-                           and self._shader_timer.start())
+        kick = lambda *_: self.shader_link_cb.isChecked() and self._shader_timer.start()
         for edit in (self.mat_ambient, self.mat_diffuse, self.mat_forced, self.mat_emmisive,
                      self.mat_specular, self.mat_power, self.mat_fresnel_n, self.mat_fresnel_k):
             edit.textChanged.connect(kick)
-        self.smdi_source.currentTextChanged.connect(kick)
         self.mc_source.currentTextChanged.connect(kick)
         self.mc_cb.toggled.connect(kick)
-        self.smdi_green.valueChanged.connect(kick)
-        self.smdi_blue.valueChanged.connect(kick)
         if self.shader_link_cb.isChecked():
             self._shader_timer.start()
+        # the same values go live to the DayZ Material Viewer
+        self._viewer_timer = QtCore.QTimer(self)
+        self._viewer_timer.setSingleShot(True)
+        self._viewer_timer.setInterval(150)
+        self._viewer_timer.timeout.connect(self._push_viewer)
+        # (not while taking values from the viewer: they would only bounce back)
+        self._from_viewer = False
+        vkick = lambda *_: (self.viewer_live_cb.isChecked() and not self._from_viewer
+                            and self._viewer_timer.start())
+        for edit in (self.mat_ambient, self.mat_diffuse, self.mat_forced, self.mat_emmisive,
+                     self.mat_specular, self.mat_power, self.mat_fresnel_n, self.mat_fresnel_k):
+            edit.textChanged.connect(vkick)
+        # ... and edits made in the viewer's material panel come back into these fields
+        _, self._viewer_mtime = viewer_link.read_from_viewer(None)    # ignore an old message
+        if getattr(self, "_viewer_poll", None) is not None:           # panel rebuilt
+            self._viewer_poll.stop()
+        self._viewer_poll = QtCore.QTimer(self)
+        self._viewer_poll.setInterval(250)
+        self._viewer_poll.timeout.connect(self._poll_viewer)
+        self._viewer_poll.start()
+
+    def _poll_viewer(self):
+        """Take material values edited in the DayZ Material Viewer (painterlink.json).
+        Also follows the active texture set (Painter has no event for switching it)."""
+        try:
+            self._sync_texture_set()
+        except Exception as e:
+            splog.warning(f"[RwG] texture set sync: {e}")
+        msg, self._viewer_mtime = viewer_link.read_from_viewer(self._viewer_mtime)
+        if not msg or not self.viewer_live_cb.isChecked() or not isinstance(msg.get("material"), dict):
+            return
+        out = self.output_edit.text().strip()
+        mine = os.path.normcase(self._dp(self._rvmat_out_path({"output": out, "prefix": self.prefix_edit.text()}))) \
+            if out else None
+        theirs = os.path.normcase(self._dp(msg.get("rvmat", "")))
+        if mine != theirs:
+            self.status.setText(f"Viewer edited {os.path.basename(theirs)} - not this project's .rvmat.")
+            return
+        fields = viewer_link.fields_from_material(msg["material"])
+        self._from_viewer = True
+        try:
+            for key, text in fields.items():
+                edit = getattr(self, key, None)
+                if edit is not None and edit.text() != text:
+                    edit.setText(text)
+        finally:
+            self._from_viewer = False
+        self.status.setText("Material values taken from the DayZ Material Viewer "
+                            "(Write .rvmat to save them).")
+
+    # ---------- DayZ Material Viewer link ----------
+    def _viewer_model(self, s):
+        """The .p3d for the viewer: the field, else found from the project."""
+        return s.get("viewer_p3d", "").strip() or self._find_project_p3d()
+
+    def _push_viewer(self, announce=False, with_files=False, files=None):
+        """Send model, written files (or the current ones in the output folder) and the
+        material values to the viewer."""
+        try:
+            # read the fields directly: _collect() would save the settings on every live change
+            s = dict(self.s)
+            s.update({
+                "output": self._dp(self.output_edit.text().strip()), "prefix": self.prefix_edit.text(),
+                "viewer_p3d": self._dp(self.viewer_p3d_edit.text().strip()),
+                "viewer_live": self.viewer_live_cb.isChecked(),
+                "mat_ambient": self.mat_ambient.text(), "mat_diffuse": self.mat_diffuse.text(),
+                "mat_forced": self.mat_forced.text(), "mat_emmisive": self.mat_emmisive.text(),
+                "mat_specular": self.mat_specular.text(), "mat_power": self.mat_power.text(),
+                "mat_fresnel_n": self.mat_fresnel_n.text(), "mat_fresnel_k": self.mat_fresnel_k.text(),
+            })
+            model = self._viewer_model(s)
+            rvmat = self._rvmat_out_path(s) if s.get("output", "").strip() else None
+            if with_files and not files and s.get("output", "").strip():
+                prefix = self._prefix(s)
+                files = [f for f in glob.glob(os.path.join(s["output"].strip(), prefix + "*"))
+                         if f.lower().endswith((".tga", ".png", ".paa", ".rvmat"))]
+            material = viewer_link.material_from_settings(s) if s.get("viewer_live", True) else None
+            # P: form throughout: the viewer compares them with the paths in the P3D
+            model, rvmat = self._dp(model), self._dp(rvmat)
+            files = [self._dp(f) for f in files] if files else files
+            # a proxy's material (stock, handguard ...): the viewer switches that proxy on
+            m = self._ts_material(rvmat)
+            proxy = m["model"] if m and m["proxy"] else None
+            viewer_link.send(model=model, files=files, rvmat=rvmat, material=material, proxy=proxy,
+                             texture_set=_active_texture_set_name())
+        except Exception as e:
+            splog.warning(f"[RwG] DayZ Material Viewer link: {e}")
+            if announce:
+                self.status.setText(f"Viewer link failed: {e}")
+            return
+        if announce:
+            self.status.setText(
+                (f"Sent to the DayZ Material Viewer: {os.path.basename(model)}" if model else
+                 "Sent material values to the viewer (no model: set Model (.p3d))")
+                + ("" if viewer_link.viewer_running() else " - the viewer is not running."))
+
+    def on_browse_viewer_p3d(self):
+        start = os.path.dirname(self.viewer_p3d_edit.text()) or self.output_edit.text()
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Model (.p3d)", start, "P3D (*.p3d)")
+        if p:
+            self.viewer_p3d_edit.setText(self._dp(os.path.normpath(p)))
+            self._collect()
+            self._load_model_materials(announce=True)
+
+    # ---------- model first: texture set -> material of the P3D ----------
+    def _find_project_p3d(self):
+        """A .p3d for this project: next to the mesh Painter imported (same name first),
+        next to the .spp, or in / above the output folder."""
+        folders, stems = [], []
+        for getter in ("last_imported_mesh_path", "file_path"):
+            try:
+                path = getattr(substance_painter.project, getter)()
+            except Exception:
+                path = None
+            if path:
+                folders.append(os.path.dirname(path))
+                stems.append(os.path.splitext(os.path.basename(path))[0].lower())
+        for folder in folders:
+            for level in range(3):                     # the folder and two levels up
+                found = glob.glob(os.path.join(folder, "*.p3d"))
+                named = [f for f in found if os.path.splitext(os.path.basename(f))[0].lower() in stems]
+                if named or len(found) == 1:
+                    return self._dp((named or found)[0])
+                folder = os.path.dirname(folder)
+        return self._dp(viewer_link.guess_p3d(self._dp(self.output_edit.text().strip())))
+
+    def _load_model_materials(self, announce=False):
+        """Read the model's materials (and its proxies') into the texture set dropdown."""
+        model = self._dp(self.viewer_p3d_edit.text().strip())
+        if not model:
+            model = self._find_project_p3d()
+            if model:
+                self.viewer_p3d_edit.setText(model)
+        self._model_mats = []
+        if model and os.path.isfile(model):
+            try:
+                self._model_mats = p3d_reader.model_materials(model, self.s.get("drive", "P:\\").strip() or "P:\\")
+            except Exception as e:
+                self.status.setText(f"Could not read the model: {e}")
+        elif announce:
+            self.status.setText("No model (.p3d) found - pick it with '...'.")
+        self.ts_mat_combo.clear()
+        self.ts_mat_combo.addItem("- choose the material this texture set paints -", None)
+        for m in self._model_mats:
+            name = os.path.basename(m["rvmat"])
+            where = f"proxy {m['proxy']}" if m["proxy"] else "model"
+            self.ts_mat_combo.addItem(f"{name}   ({where}, {m['faces']} faces)", m["rvmat"])
+        if announce and self._model_mats:
+            self.status.setText(f"Model read: {len(self._model_mats)} material(s) incl. proxies.")
+        self._last_ts = None
+        self._sync_texture_set()
+
+    def _ts_material(self, rvmat):
+        key = os.path.normcase(rvmat or "")
+        return next((m for m in getattr(self, "_model_mats", []) if os.path.normcase(m["rvmat"]) == key), None)
+
+    def _sync_texture_set(self):
+        """Follow the active texture set: its remembered (or suggested) material sets
+        Output folder and Prefix."""
+        ts = _active_texture_set_name()
+        if ts == getattr(self, "_last_ts", None):
+            return
+        self._last_ts = ts
+        self.ts_label.setText(f"Texture set '{ts}':" if ts else "Texture set:")
+        mats = getattr(self, "_model_mats", [])
+        rv = (self.s.get("ts_materials") or {}).get(ts or "")
+        m = self._ts_material(rv) or p3d_reader.suggest(mats, ts)
+        self.ts_mat_combo.setCurrentIndex(max(0, self.ts_mat_combo.findData(m["rvmat"])) if m else 0)
+        if m:
+            self._apply_ts_material(m)
+        self._update_path_check()
+
+    def _on_ts_material_chosen(self, index):
+        m = self._ts_material(self.ts_mat_combo.itemData(index))
+        if m is None:
+            return
+        ts = _active_texture_set_name() or ""
+        mapping = dict(self.s.get("ts_materials") or {})
+        mapping[ts] = m["rvmat"]
+        self.s["ts_materials"] = mapping
+        self._apply_ts_material(m)
+        self._collect()                                # saved with the project
+
+    def _apply_ts_material(self, m):
+        out = os.path.dirname(m["rvmat"])
+        prefix = os.path.splitext(os.path.basename(m["rvmat"]))[0]
+        if os.path.normcase(self._dp(self.output_edit.text().strip())) != os.path.normcase(out) \
+                or self.prefix_edit.text().strip() != prefix:
+            self.output_edit.setText(out)
+            self.prefix_edit.setText(prefix)
+            self._detect_rvmat()                       # this material's values into the RVMAT tab
+        self._update_path_check()
+
+    def _update_path_check(self):
+        """One plain line per path: does the export land where the model expects it?"""
+        m = self._ts_material(self.ts_mat_combo.currentData())
+        out = self._dp(self.output_edit.text().strip())
+        prefix = self.prefix_edit.text().strip()
+        ok, bad = "<span style='color:#7bd88f'>✓</span>", "<span style='color:#ff6b6b'>✗</span>"
+        lines = []
+        if m is None:
+            if getattr(self, "_model_mats", None):
+                lines.append(f"{bad} Choose which material this texture set paints.")
+        else:
+            rv_ok = os.path.normcase(os.path.join(out, prefix + ".rvmat")) == os.path.normcase(m["rvmat"])
+            lines.append(f"{ok if rv_ok else bad} The model expects <b>{os.path.basename(m['rvmat'])}</b> in "
+                         f"{os.path.dirname(m['rvmat'])}" + ("" if rv_ok else
+                         f" - Output folder / Prefix write <b>{prefix}.rvmat</b> to {out or '(nothing)'}"))
+            tex = m["texture"]
+            if tex and not tex.startswith("#"):
+                stem = os.path.splitext(os.path.basename(tex))[0]
+                co_ok = (os.path.normcase(os.path.dirname(tex)) == os.path.normcase(out)
+                         and stem.lower() in (prefix.lower() + "_co", prefix.lower() + "_ca"))
+                lines.append(f"{ok if co_ok else bad} Its faces use the texture <b>{stem}</b>"
+                             + ("" if co_ok else f" - the export writes <b>{prefix}_co</b> to {out or '(nothing)'}"))
+            if m["proxy"]:
+                lines.append(f"{ok} Proxy <b>{m['proxy']}</b> - the viewer shows it on the model.")
+        self.path_check.setText("<br>".join(lines))
+        self.path_check.setVisible(bool(lines))
+
+    def on_open_viewer(self):
+        s = self._collect()
+        model = self._viewer_model(s)
+        if not viewer_link.viewer_running():
+            try:
+                viewer_link.start_viewer(s.get("viewer_exe", "").strip(), model)
+            except Exception as e:
+                self.status.setText(f"{e}"); return
+            # the viewer opens the model itself; send the live values once it watches the link
+            QtCore.QTimer.singleShot(4000, lambda: self._push_viewer())
+            self.status.setText("Starting the DayZ Material Viewer…")
+            return
+        self._push_viewer(announce=True, with_files=True)
 
     def _shader_values(self):
-        src = self.smdi_source.currentText()
         return shader_sync.params_from_settings({
             "mat_ambient": self.mat_ambient.text(), "mat_diffuse": self.mat_diffuse.text(),
             "mat_forced": self.mat_forced.text(), "mat_emmisive": self.mat_emmisive.text(),
             "mat_specular": self.mat_specular.text(), "mat_power": self.mat_power.text(),
             "mat_fresnel_n": self.mat_fresnel_n.text(),
             "mat_fresnel_k": self.mat_fresnel_k.text(),
-            "smdi_source": "dayz" if src.startswith("DayZ") else "other",
-            "smdi_green": self.smdi_green.value() / 100.0,
-            "smdi_blue": self.smdi_blue.value() / 100.0,
+            "smdi_source": "dayz",
+            "smdi_green": 1.0,
+            "smdi_blue": 1.0,
             "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
         })
 
     def _push_shader(self, announce=False):
+        """Send the values to the DayZ In-Game shader of the ACTIVE texture set only -
+        each texture set paints its own .rvmat (one shared instance is split up)."""
+        ts = _active_texture_set_name()
         try:
-            n = shader_sync.push(self._shader_values())
+            n = shader_sync.push(self._shader_values(), ts)
         except Exception as e:
             splog.warning(f"[RwG] DayZ In-Game shader link: {e}")
+            if announce:
+                self.status.setText(f"DayZ In-Game shader link failed: {e}")
             return
         if announce:
             self.status.setText(
-                f"Material values sent to {n} DayZ In-Game shader instance(s)." if n else
-                "No texture set uses the 'dayz-ingame' shader yet (Texture Set Settings -> Shader).")
-
-    def on_pull_shader(self):
-        """Fill the material fields from the DayZ In-Game shader's settings."""
-        try:
-            p = shader_sync.pull()
-        except Exception as e:
-            self.status.setText(f"Could not read the shader: {e}"); return
-        if not p:
-            self.status.setText("No texture set uses the 'dayz-ingame' shader."); return
-
-        def vec(edit, key):
-            v = p.get(key)
-            if isinstance(v, (list, tuple)) and len(v) >= 3:
-                old = _parse_vec(edit.text())
-                alpha = old[3] if len(old) > 3 else "1"
-                edit.setText(_vec_str([f"{float(x):.4g}" for x in v[:3]] + [alpha]))
-
-        self._shader_pulling = True
-        try:
-            vec(self.mat_ambient, "u_ambient")
-            vec(self.mat_diffuse, "u_diffuse")
-            vec(self.mat_forced, "u_forced")
-            vec(self.mat_emmisive, "u_emmisive")
-            vec(self.mat_specular, "u_specular")
-            for edit, key in ((self.mat_power, "u_power"), (self.mat_fresnel_n, "u_fresnel_n"),
-                              (self.mat_fresnel_k, "u_fresnel_k")):
-                if p.get(key) is not None:
-                    edit.setText(f"{float(p[key]):.4g}")
-            for slider, key in ((self.smdi_green, "u_g_factor"), (self.smdi_blue, "u_b_factor")):
-                if p.get(key) is not None:
-                    slider.setValue(int(round(float(p[key]) * 100)))
-        finally:
-            self._shader_pulling = False
-        # the shader may hold other values for linked fields (e.g. a macro source) -
-        # bring it back in line with the panel
-        if self.shader_link_cb.isChecked():
-            self._push_shader()
-        self.status.setText("Material values taken from the DayZ In-Game shader.")
+                f"Material values sent to the DayZ In-Game shader of texture set '{ts}'." if n else
+                f"Texture set '{ts}' does not use the 'dayz-ingame' shader "
+                "(Texture Set Settings -> Shader).")
 
     def _update_mode_fields(self, *_):
         """Grey out Preset/Shelf when the mode is Built-in maps."""
@@ -2512,8 +2680,7 @@ class RwGDock(QtWidgets.QWidget):
             maps, export_dir, py = self._export_estimate_maps(plan, "_mat_src")
             if not maps.get("roughness"):
                 raise RuntimeError("No roughness channel to sample.")
-            mode = "dayz" if self.smdi_source.currentText().startswith("DayZ") else "classic"
-            summary = _exec_cli(py, ["--estimate-material", "--estimate-mode", mode,
+            summary = _exec_cli(py, ["--estimate-material", "--estimate-mode", "dayz",
                                      "--roughness", maps["roughness"]], splog.info)
             if not summary or summary.get("specular_power") is None:
                 raise RuntimeError("Estimate failed: "
@@ -2773,7 +2940,7 @@ class RwGDock(QtWidgets.QWidget):
             return False
 
     def on_settings(self):
-        """Dialog holding the tool paths: Python, ImageToPAA, MatEditor."""
+        """Dialog holding the tool paths: Python, ImageToPAA, DayZ Material Viewer."""
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("RwG DayZ Exporter - Settings")
         dlg.resize(580, 260)
@@ -2798,8 +2965,9 @@ class RwGDock(QtWidgets.QWidget):
         auto.clicked.connect(lambda: self.on_detect_python(py_edit))
         prow.addWidget(auto)
         _, ip_edit = path_row("ImageToPAA.exe:", "imagetopaa")
-        _, me_edit = path_row("MatEditor.exe:", "mateditor")
         _, tv_edit = path_row("TexView.exe:", "texview")
+        _, vw_edit = path_row("DayZViewer.exe:", "viewer_exe")
+        vw_edit.setToolTip("DayZ Material Viewer, for 'Open in viewer' (Setup tab).")
 
         drow = QtWidgets.QHBoxLayout()
         dlab = QtWidgets.QLabel("Mod drive:")
@@ -2865,8 +3033,8 @@ class RwGDock(QtWidgets.QWidget):
         if run():
             self.s["python"] = py_edit.text()
             self.s["imagetopaa"] = ip_edit.text()
-            self.s["mateditor"] = me_edit.text()
             self.s["texview"] = tv_edit.text()
+            self.s["viewer_exe"] = vw_edit.text().strip()
             self.s["drive"] = drive_field.text().strip() or "P:\\"
             self.s["presets_path"] = presets_field.text().strip()
             new_mode = "single" if layout_combo.currentText().startswith("Single") else "tabs"
@@ -3049,29 +3217,17 @@ class RwGDock(QtWidgets.QWidget):
                     plan.append({"fileName": fn, "srcType": st, "srcName": sn, "mode": mode})
 
             if s["co_on"]:
-                if s["co_source"] == "diffuse":
-                    add("$textureSet_diffuse", "virtualMap", "Diffuse", "rgb")
-                elif s["co_source"] == "2d_view":
-                    add("$textureSet_view2d", "virtualMap", "View_2D", "rgb")
-                else:
-                    add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
-                    if s["co_source"] in ("base_color_specular", "specgloss"):
-                        add("$textureSet_metallic", "documentMap", "metallic", "gray")
+                add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
                 if s["co_alpha"]:                     # _ca variant needs opacity
                     add("$textureSet_opacity", "documentMap", "opacity", "gray")
             if s["nohq_on"]:
                 vname = "Normal_OpenGL" if s["normal_format"] == "opengl" else "Normal_DirectX"
                 add("$textureSet_normal", "virtualMap", vname, "rgb")
-            if s["smdi_on"]:
-                if s["smdi_source"] == "specgloss":
-                    add("$textureSet_specular", "virtualMap", "Specular", "rgb")
-                    add("$textureSet_glossiness", "virtualMap", "Glossiness", "rgb")
-                else:
-                    add("$textureSet_metallic", "documentMap", "metallic", "gray")
-                    add("$textureSet_roughness", "documentMap", "roughness", "gray")
-                    if s["smdi_source"] in ("pbr", "gltf", "dayz"):
-                        # raw albedo carries each metal's F0 for PBR / glTF / DayZ methods
-                        add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
+            if s["smdi_on"] or s.get("dtsmdi_on"):
+                add("$textureSet_metallic", "documentMap", "metallic", "gray")
+                add("$textureSet_roughness", "documentMap", "roughness", "gray")
+                # raw albedo carries each metal's F0 for the DayZ method
+                add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
             if s["as_on"]:
                 add("$textureSet_ao", "virtualMap", "AO_Mixed", "gray")
             if s["em_on"]:
@@ -3089,15 +3245,6 @@ class RwGDock(QtWidgets.QWidget):
                 elif a.startswith("User"):
                     add(f"$textureSet_{a.lower()}", "documentMap", a.lower(), "gray")
             if s.get("dtsmdi_on"):
-                m = s["smdi_source"]
-                if m == "specgloss":
-                    add("$textureSet_specular", "virtualMap", "Specular", "rgb")
-                    add("$textureSet_glossiness", "virtualMap", "Glossiness", "rgb")
-                else:
-                    add("$textureSet_metallic", "documentMap", "metallic", "gray")
-                    add("$textureSet_roughness", "documentMap", "roughness", "gray")
-                    if m in ("pbr", "gltf", "dayz"):
-                        add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
                 # the _dtsmdi R (detail) combines height + mesh + normal: the
                 # converted normal (normal + baked mesh + height) always, plus the
                 # raw Height channel when the project has one.
@@ -3116,67 +3263,36 @@ class RwGDock(QtWidgets.QWidget):
 
             args = ["--output", s["output"].strip(), "--prefix", prefix,
                     "--drive", s["drive"].strip() or "P:\\"]
-            co_mode = ("base_color_specular" if s["co_source"] == "base_color_specular"
-                       else "specgloss" if s["co_source"] == "specgloss"
-                       else "base_color")
             # Painter's virtual maps are already in their final format, so the CLI
             # must NOT flip the normal - pass 'directx' to disable flipping.
-            args += ["--co-mode", co_mode, "--normal-format", "directx",
+            args += ["--co-mode", "base_color", "--normal-format", "directx",
                      "--spec", str(s["smdi_green"]), "--gloss", str(s["smdi_blue"])]
 
-            co_input = {"diffuse": maps.get("diffuse"),
-                        "2d_view": maps.get("view2d")}.get(s["co_source"], maps.get("basecolor"))
-            if s["co_on"] and co_input:
-                args += ["--basecolor", co_input, "--co-res", s["co_res"]]
-                if co_mode in ("base_color_specular", "specgloss") and maps.get("metallic"):
-                    args += ["--metallic", maps["metallic"]]
+            if s["co_on"] and maps.get("basecolor"):
+                args += ["--basecolor", maps["basecolor"], "--co-res", s["co_res"]]
                 if s["co_alpha"]:                     # export as _ca (colour + alpha)
                     args += ["--co-alpha"]
                     if maps.get("opacity"):
                         args += ["--co-opacity", maps["opacity"]]
             if s["nohq_on"] and maps.get("normal"):
                 args += ["--normal", maps["normal"], "--nohq-res", s["nohq_res"]]
-            if s["smdi_on"]:
-                args += ["--smdi"]          # explicitly request the _smdi map
-                if s["smdi_source"] == "specgloss" and maps.get("specular") and maps.get("glossiness"):
-                    args += ["--smdi-mode", "specgloss",
-                             "--spec-map", maps["specular"], "--gloss-map", maps["glossiness"],
-                             "--smdi-res", s["smdi_res"]]
-                elif s["smdi_source"] == "dayz" and maps.get("metallic") and maps.get("roughness"):
-                    args += ["--smdi-mode", "dayz",
-                             "--metallic", maps["metallic"], "--roughness", maps["roughness"],
-                             "--smdi-res", s["smdi_res"]] + s["dayz_rvmat"]
-                    if maps.get("basecolor"):
-                        args += ["--smdi-basecolor", maps["basecolor"]]
-                elif s["smdi_source"] in ("pbr", "gltf") and maps.get("metallic") and \
-                        maps.get("roughness") and maps.get("basecolor"):
-                    args += ["--smdi-mode", s["smdi_source"],
-                             "--metallic", maps["metallic"], "--roughness", maps["roughness"],
-                             "--smdi-basecolor", maps["basecolor"], "--smdi-res", s["smdi_res"]]
-                elif maps.get("metallic") and maps.get("roughness"):
-                    args += ["--smdi-mode", "metrough",
-                             "--metallic", maps["metallic"], "--roughness", maps["roughness"],
-                             "--smdi-res", s["smdi_res"]]
+            has_mr = maps.get("metallic") and maps.get("roughness")
+            if (s["smdi_on"] or s.get("dtsmdi_on")) and not has_mr:
+                splog.warning("[RwG] _smdi needs the metallic and roughness channels - not exported.")
+            if s["smdi_on"] and has_mr:
+                args += ["--smdi", "--smdi-mode", "dayz",
+                         "--metallic", maps["metallic"], "--roughness", maps["roughness"],
+                         "--smdi-res", s["smdi_res"]] + s["dayz_rvmat"]
+                if maps.get("basecolor"):
+                    args += ["--smdi-basecolor", maps["basecolor"]]
             if s.get("dtsmdi_on"):
-                m = s["smdi_source"]
                 dt = None
-                if m == "specgloss" and maps.get("specular") and maps.get("glossiness"):
-                    dt = ["--dtsmdi-mode", "specgloss",
-                          "--spec-map", maps["specular"], "--gloss-map", maps["glossiness"]]
-                elif m == "dayz" and maps.get("metallic") and maps.get("roughness"):
+                if has_mr:
                     dt = ["--dtsmdi-mode", "dayz",
                           "--metallic", maps["metallic"], "--roughness", maps["roughness"]] \
                          + s["dayz_rvmat"]
                     if maps.get("basecolor"):
                         dt += ["--smdi-basecolor", maps["basecolor"]]
-                elif m in ("pbr", "gltf") and maps.get("metallic") and \
-                        maps.get("roughness") and maps.get("basecolor"):
-                    dt = ["--dtsmdi-mode", m,
-                          "--metallic", maps["metallic"], "--roughness", maps["roughness"],
-                          "--smdi-basecolor", maps["basecolor"]]
-                elif maps.get("metallic") and maps.get("roughness"):
-                    dt = ["--dtsmdi-mode", "metrough",
-                          "--metallic", maps["metallic"], "--roughness", maps["roughness"]]
                 if dt is not None:
                     args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"],
                              "--dtsmdi-strength", str(s["dtsmdi_strength"])] + dt
@@ -3242,615 +3358,6 @@ class RwGDock(QtWidgets.QWidget):
             splog.error(f"[RwG] {e}")
             self.status.setText(f"Error: {e}")
 
-    # ------------------------------------------------------------------ #
-    #  In-Painter map preview (window + spare-channel)                    #
-    # ------------------------------------------------------------------ #
-    def _preview_prepare(self, kind):
-        """(main thread) Export the source channels and build the CLI args for a
-        single DayZ map preview. Returns a context dict; the caller runs the
-        conversion on a worker thread. Raises on any setup error."""
-        if not substance_painter.project.is_open():
-            raise RuntimeError("Open a project first.")
-        s = self._collect()
-        py = s.get("python") or detect_python()[0]
-        if not py:
-            raise RuntimeError("Set 'Python' (numpy + pillow) in Settings first.")
-
-        plan = []
-
-        def add(fn, st, sn, mode):
-            if not any(o["fileName"] == fn for o in plan):
-                plan.append({"fileName": fn, "srcType": st, "srcName": sn, "mode": mode})
-
-        nfmt = "opengl" if s["normal_format"] == "opengl" else "directx"
-        vnorm = "Normal_OpenGL" if nfmt == "opengl" else "Normal_DirectX"
-
-        if kind == "co":
-            if s["co_source"] == "diffuse":
-                add("$textureSet_diffuse", "virtualMap", "Diffuse", "rgb")
-            elif s["co_source"] == "2d_view":
-                add("$textureSet_view2d", "virtualMap", "View_2D", "rgb")
-            else:
-                add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
-                if s["co_source"] in ("base_color_specular", "specgloss"):
-                    add("$textureSet_metallic", "documentMap", "metallic", "gray")
-        elif kind == "nohq":
-            add("$textureSet_normal", "virtualMap", vnorm, "rgb")
-        elif kind == "as":
-            add("$textureSet_ao", "virtualMap", "AO_Mixed", "gray")
-        elif kind in ("smdi", "dtsmdi"):
-            m = s["smdi_source"]
-            if m == "specgloss":
-                add("$textureSet_specular", "virtualMap", "Specular", "rgb")
-                add("$textureSet_glossiness", "virtualMap", "Glossiness", "rgb")
-            else:
-                add("$textureSet_metallic", "documentMap", "metallic", "gray")
-                add("$textureSet_roughness", "documentMap", "roughness", "gray")
-                if m in ("pbr", "gltf", "dayz"):
-                    add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
-            if kind == "dtsmdi":
-                add("$textureSet_normal", "virtualMap", vnorm, "rgb")
-                if self._has_channel("Height"):
-                    add("$textureSet_height", "documentMap", "height", "gray")
-        elif kind == "em":
-            add("$textureSet_emissive", "documentMap", "emissive", "rgb")
-        elif kind == "mc":
-            if s["mc_source"].startswith("Combine"):
-                for u in ("user0", "user1", "user2"):
-                    add(f"$textureSet_{u}", "documentMap", u, "rgb")
-            else:
-                uch = s["mc_source"].lower()
-                add(f"$textureSet_{uch}", "documentMap", uch, "rgb")
-            a = s["mc_alpha"]
-            if a == "Opacity":
-                add("$textureSet_opacity", "documentMap", "opacity", "gray")
-            elif a.startswith("User"):
-                add(f"$textureSet_{a.lower()}", "documentMap", a.lower(), "gray")
-        else:
-            raise RuntimeError(f"Unknown preview map '{kind}'.")
-
-        if not plan:
-            raise RuntimeError("Nothing to preview for this map.")
-
-        tmp = os.path.join(tempfile.gettempdir(), "rwg_preview")
-        src_dir = os.path.join(tmp, "_src")
-        shutil.rmtree(src_dir, ignore_errors=True)
-        os.makedirs(tmp, exist_ok=True)
-        paths = export_project_maps(src_dir, plan, splog.info)
-        maps = maps_from_export_paths(paths)
-        if not maps:
-            raise RuntimeError("Preview export produced no recognizable maps - see Log.")
-
-        prefix = "rwgpreview"
-        co_mode = ("base_color_specular" if s["co_source"] == "base_color_specular"
-                   else "specgloss" if s["co_source"] == "specgloss" else "base_color")
-        args = ["--output", tmp, "--prefix", prefix,
-                "--drive", s["drive"].strip() or "P:\\",
-                "--co-mode", co_mode, "--normal-format", "directx",
-                "--spec", str(s["smdi_green"]), "--gloss", str(s["smdi_blue"])]
-
-        if kind == "co":
-            co_input = {"diffuse": maps.get("diffuse"),
-                        "2d_view": maps.get("view2d")}.get(s["co_source"],
-                                                           maps.get("basecolor"))
-            if not co_input:
-                raise RuntimeError("No base colour to build _co from.")
-            args += ["--basecolor", co_input, "--co-res", s["co_res"]]
-            if s["co_source"] in ("base_color_specular", "specgloss") and maps.get("metallic"):
-                args += ["--metallic", maps["metallic"]]
-        elif kind == "nohq":
-            if not maps.get("normal"):
-                raise RuntimeError("No normal channel to build _nohq from.")
-            args += ["--normal", maps["normal"], "--nohq-res", s["nohq_res"]]
-        elif kind == "as":
-            if not maps.get("ao"):
-                raise RuntimeError("No AO channel to build _as from.")
-            args += ["--ao", maps["ao"], "--as-res", s["as_res"]]
-        elif kind == "smdi":
-            args += ["--smdi", "--smdi-res", s["smdi_res"]]
-            m = s["smdi_source"]
-            if m == "specgloss" and maps.get("specular") and maps.get("glossiness"):
-                args += ["--smdi-mode", "specgloss", "--spec-map", maps["specular"],
-                         "--gloss-map", maps["glossiness"]]
-            elif m == "dayz" and maps.get("metallic") and maps.get("roughness"):
-                args += ["--smdi-mode", "dayz", "--metallic", maps["metallic"],
-                         "--roughness", maps["roughness"]] + s["dayz_rvmat"]
-                if maps.get("basecolor"):
-                    args += ["--smdi-basecolor", maps["basecolor"]]
-            elif m in ("pbr", "gltf") and maps.get("metallic") and \
-                    maps.get("roughness") and maps.get("basecolor"):
-                args += ["--smdi-mode", m, "--metallic", maps["metallic"],
-                         "--roughness", maps["roughness"], "--smdi-basecolor", maps["basecolor"]]
-            elif maps.get("metallic") and maps.get("roughness"):
-                args += ["--smdi-mode", "metrough", "--metallic", maps["metallic"],
-                         "--roughness", maps["roughness"]]
-            else:
-                raise RuntimeError("Missing metallic/roughness (or spec/gloss) for _smdi.")
-        elif kind == "dtsmdi":
-            m = s["smdi_source"]
-            if m == "specgloss" and maps.get("specular") and maps.get("glossiness"):
-                dt = ["--dtsmdi-mode", "specgloss", "--spec-map", maps["specular"],
-                      "--gloss-map", maps["glossiness"]]
-            elif m == "dayz" and maps.get("metallic") and maps.get("roughness"):
-                dt = ["--dtsmdi-mode", "dayz", "--metallic", maps["metallic"],
-                      "--roughness", maps["roughness"]] + s["dayz_rvmat"]
-                if maps.get("basecolor"):
-                    dt += ["--smdi-basecolor", maps["basecolor"]]
-            elif m in ("pbr", "gltf") and maps.get("metallic") and \
-                    maps.get("roughness") and maps.get("basecolor"):
-                dt = ["--dtsmdi-mode", m, "--metallic", maps["metallic"],
-                      "--roughness", maps["roughness"], "--smdi-basecolor", maps["basecolor"]]
-            elif maps.get("metallic") and maps.get("roughness"):
-                dt = ["--dtsmdi-mode", "metrough", "--metallic", maps["metallic"],
-                      "--roughness", maps["roughness"]]
-            else:
-                raise RuntimeError("Missing metallic/roughness (or spec/gloss) for _dtsmdi.")
-            args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"],
-                     "--dtsmdi-strength", str(s["dtsmdi_strength"])] + dt
-            det = [maps[k] for k in ("normal", "height") if maps.get(k)]
-            if det:
-                args += ["--dtsmdi-detail"] + det
-        elif kind == "em":
-            if not maps.get("emissive"):
-                raise RuntimeError("No Emissive channel to build _em from.")
-            args += ["--emissive", maps["emissive"], "--em-res", s["em_res"]]
-        elif kind == "mc":
-            if s["mc_source"].startswith("Combine"):
-                mc_paths = [maps.get(u) for u in ("user0", "user1", "user2") if maps.get(u)]
-                if not mc_paths:
-                    raise RuntimeError("No User channels to build _mc from.")
-                args += ["--mc"] + mc_paths + \
-                        ["--mc-blend", s["mc_blend"].lower(), "--mc-res", s["mc_res"]]
-            else:
-                mc_src = maps.get(s["mc_source"].lower())
-                if not mc_src:
-                    raise RuntimeError("No User channel to build _mc from.")
-                args += ["--mc", mc_src, "--mc-res", s["mc_res"]]
-            a = s["mc_alpha"]
-            if a == "Auto (macro)":
-                args += ["--mc-alpha", "auto"]
-            elif a == "Opacity" and maps.get("opacity"):
-                args += ["--mc-alpha", maps["opacity"]]
-            elif a.startswith("User") and maps.get(a.lower()):
-                args += ["--mc-alpha", maps[a.lower()]]
-
-        return {"py": py, "args": args, "tmp": tmp,
-                "prefix": prefix, "suffix": "_" + kind, "kind": kind}
-
-    def _preview_resolve(self, res, tmp, prefix, suffix):
-        tga = None
-        if isinstance(res, dict):
-            tga = (res.get("tga") or {}).get(suffix)
-        if not tga or not os.path.exists(tga):
-            cand = os.path.join(tmp, prefix + suffix + ".tga")
-            tga = cand if os.path.exists(cand) else None
-        if not tga:
-            raise RuntimeError(f"Converter did not produce {suffix} - see Log.")
-        return tga
-
-    def _remove_preview_layers(self, stack):
-        """Delete any fill layers this plugin added for a channel preview."""
-        if splayer is None:
-            return
-        try:
-            nodes = splayer.get_root_layer_nodes(stack)
-        except Exception:
-            nodes = []
-        for n in list(nodes):
-            try:
-                nm = n.get_name()
-            except Exception:
-                nm = ""
-            if isinstance(nm, str) and nm.startswith("RwG preview"):
-                done = False
-                for meth in ("delete", "remove"):
-                    try:
-                        getattr(n, meth)()
-                        done = True
-                        break
-                    except Exception:
-                        pass
-                if not done:
-                    try:
-                        splayer.delete_node(n)
-                    except Exception as e:
-                        splog.warning(f"[RwG] could not delete preview layer: {e}")
-
-    def _push_preview_channel(self, kind, tga):
-        """Load the computed map into a spare User channel via a top fill layer,
-        so it can be inspected in Painter's 2D view. Best-effort / experimental."""
-        if sptexset is None or splayer is None or spresource is None:
-            raise RuntimeError("Layer/channel API not available in this Painter version.")
-        stack = sptexset.get_active_stack()
-        CT = getattr(sptexset, "ChannelType", None)
-        CF = getattr(sptexset, "ChannelFormat", None)
-        if stack is None or CT is None:
-            raise RuntimeError("Channel API not available in this Painter version.")
-
-        try:
-            existing = set(stack.all_channels().keys())
-        except Exception:
-            existing = set()
-        col_fmt = None
-        for fn in ("sRGB8", "RGB8", "sRGB16F", "RGB16F"):
-            col_fmt = getattr(CF, fn, None)
-            if col_fmt is not None:
-                break
-
-        ch = None
-        ch_name = None
-        for uname in ("User7", "User6", "User5", "User4", "User3"):
-            ct = getattr(CT, uname, None)
-            if ct is None:
-                continue
-            if ct not in existing and col_fmt is not None:
-                try:
-                    stack.add_channel(ct, col_fmt)
-                except Exception as e:
-                    splog.warning(f"[RwG] add preview channel {uname}: {e}")
-                    continue
-            ch, ch_name = ct, uname
-            break
-        if ch is None:
-            raise RuntimeError("No spare User channel available for the preview.")
-
-        rid = spresource.import_session_resource(
-            tga, spresource.Usage.TEXTURE).identifier()
-
-        self._remove_preview_layers(stack)
-        pos = splayer.InsertPosition.from_textureset_stack(stack)
-        layer = splayer.insert_fill(pos)
-        try:
-            layer.set_name(f"RwG preview _{kind}")
-        except Exception:
-            pass
-        # restrict the fill to the preview channel only, so it doesn't grey out
-        # the real material channels
-        for attr, val in (("active_channels", {ch}),):
-            try:
-                setattr(layer, attr, val)
-            except Exception as e:
-                splog.warning(f"[RwG] set {attr}: {e}")
-        layer.set_source(ch, rid)
-        return ch_name
-
-    def on_preview_map(self, kind):
-        if getattr(self, "_busy", False):
-            self.status.setText("Busy - please wait for the current job to finish.")
-            return
-        kind = str(kind).lstrip("_")
-        try:
-            ctx = self._preview_prepare(kind)          # main: Painter export
-        except Exception as e:
-            splog.error(f"[RwG] preview: {e}")
-            self.status.setText(f"Preview error: {e}")
-            return
-
-        self.status.setText(f"Building _{kind} preview\u2026 (background)")
-        self._set_busy(True)
-
-        def work():
-            return _exec_cli(ctx["py"], ctx["args"], splog.info)
-
-        def done(res, error):
-            try:
-                if error is not None:
-                    splog.error(f"[RwG] preview: {error}")
-                    self.status.setText(f"Preview error: {error}")
-                    return
-                tga = self._preview_resolve(res, ctx["tmp"], ctx["prefix"], ctx["suffix"])
-                ch_name = self._push_preview_channel(kind, tga)   # main: layerstack
-                self.status.setText(
-                    f"_{kind} loaded into the '{ch_name}' channel - "
-                    "select it in the 2D view.")
-            except Exception as e:
-                splog.error(f"[RwG] preview: {e}")
-                self.status.setText(f"Preview error: {e}")
-            finally:
-                self._set_busy(False)
-
-        self._run_bg(work, done)
-
-    def on_clear_preview(self):
-        if sptexset is None or splayer is None:
-            self.status.setText("Layer API not available in this Painter version.")
-            return
-        try:
-            stack = sptexset.get_active_stack()
-            self._remove_preview_layers(stack)
-            self.status.setText("Removed preview layer(s).")
-        except Exception as e:
-            splog.error(f"[RwG] clear preview: {e}")
-            self.status.setText(f"Clear error: {e}")
-
-    def on_load_env_hdri(self):
-        """Import an equirectangular HDRI and set it as Painter's viewport
-        environment (Display Settings) to match the in-game lighting while you
-        paint. Unrelated to the rvmat 'env' (that's the game's reflection
-        cubemap). Click loads the saved HDRI; Shift-click picks a different one."""
-        if spdisplay is None or spresource is None:
-            self.status.setText("Display API not available in this Painter version.")
-            return
-        if not substance_painter.project.is_open():
-            self.status.setText("Open a project first.")
-            return
-        usage = getattr(spresource.Usage, "ENVIRONMENT", None)
-        if usage is None:
-            self.status.setText("This Painter version has no ENVIRONMENT resource usage.")
-            return
-
-        path = self.s.get("env_hdri", "")
-        force_pick = bool(QtWidgets.QApplication.keyboardModifiers()
-                          & QtCore.Qt.ShiftModifier)
-        if force_pick or not path or not os.path.exists(path):
-            start = os.path.dirname(path) if path else ""
-            picked, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self, "Choose a viewport HDRI (equirectangular)", start,
-                "Environment images (*.hdr *.exr *.hdri *.tif *.tiff *.png *.jpg *.jpeg)")
-            if not picked:
-                return
-            path = picked
-            self.s["env_hdri"] = path
-            save_settings(self.s)
-
-        try:
-            rid = spresource.import_session_resource(path, usage).identifier()
-            spdisplay.set_environment_resource(rid)
-            self.status.setText(
-                f"Viewport environment set from {os.path.basename(path)}.")
-        except Exception as e:
-            splog.error(f"[RwG] env HDRI: {e}")
-            self.status.setText(f"Env HDRI error: {e}")
-
-    def on_dayz_env_dialog(self):
-        """Reproject a DayZ 'hemisphere-in-plane' env image to an equirectangular
-        panorama (pick the projection model by eye) and load it as Painter's
-        viewport environment."""
-        if spdisplay is None or spresource is None:
-            self.status.setText("Display API not available in this Painter version.")
-            return
-        if not substance_painter.project.is_open():
-            self.status.setText("Open a project first.")
-            return
-        usage = getattr(spresource.Usage, "ENVIRONMENT", None)
-        if usage is None:
-            self.status.setText("This Painter version has no ENVIRONMENT resource usage.")
-            return
-
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("DayZ env → viewport (reproject)")
-        dlg.setStyleSheet(DOCK_QSS)
-        dlg.resize(560, 560)
-        v = QtWidgets.QVBoxLayout(dlg)
-
-        frow = QtWidgets.QHBoxLayout()
-        frow.addWidget(QtWidgets.QLabel("DayZ env:"))
-        src_edit = QtWidgets.QLineEdit(self.s.get("env_dayz_src", ""))
-        src_edit.setToolTip("A DayZ env image (the hemisphere-in-plane texture), "
-                            "e.g. a .tga export of env_land_co.")
-        frow.addWidget(src_edit, 1)
-        br = QtWidgets.QPushButton("…")
-        br.setFixedWidth(30)
-
-        def do_browse():
-            start = os.path.dirname(src_edit.text()) if src_edit.text() else ""
-            p, _ = QtWidgets.QFileDialog.getOpenFileName(
-                dlg, "DayZ env map", start,
-                "Env image (*.tga *.png *.tif *.tiff *.jpg *.jpeg)")
-            if p:
-                src_edit.setText(p)
-        br.clicked.connect(do_browse)
-        frow.addWidget(br)
-        v.addLayout(frow)
-
-        orow = QtWidgets.QHBoxLayout()
-        orow.addWidget(QtWidgets.QLabel("Tiles:"))
-        tiles_cb = QtWidgets.QComboBox()
-        tiles_cb.addItems(["2", "3", "4", "5", "6"])
-        tiles_cb.setCurrentText(str(self.s.get("env_dayz_tiles", "3")))
-        tiles_cb.setToolTip("How many times the landscape plate repeats around "
-                            "360°. 3 usually looks natural.")
-        orow.addWidget(tiles_cb)
-        mirror_cb = QtWidgets.QCheckBox("mirror")
-        mirror_cb.setChecked(bool(self.s.get("env_dayz_mirror", True)))
-        mirror_cb.setToolTip("Mirror alternate copies so the tile seams vanish.")
-        orow.addWidget(mirror_cb)
-        orow.addSpacing(10)
-        orow.addWidget(QtWidgets.QLabel("Exp:"))
-        gain_cb = QtWidgets.QComboBox()
-        gain_cb.addItems(["1.0", "1.5", "2.0", "3.0", "4.0"])
-        gain_cb.setCurrentText(str(self.s.get("env_dayz_gain", "2.0")))
-        gain_cb.setToolTip("Brightness/exposure of the env. The DayZ plate is a "
-                           "dim LDR image, so 2–3 usually lights the model well "
-                           "(written as a real .hdr).")
-        orow.addWidget(gain_cb)
-        orow.addSpacing(10)
-        orow.addWidget(QtWidgets.QLabel("Rotate:"))
-        rot_cb = QtWidgets.QComboBox()
-        rot_cb.addItems(["0°", "90°", "180°", "270°"])
-        rot_cb.setCurrentText(str(self.s.get("env_dayz_rot", "0")).rstrip("°") + "°")
-        rot_cb.setToolTip("Rotate the panorama horizontally (which way faces front).")
-        orow.addWidget(rot_cb)
-        orow.addStretch(1)
-        v.addLayout(orow)
-
-        img = QtWidgets.QLabel("Preview the reprojection, then load it into the viewport.")
-        img.setAlignment(QtCore.Qt.AlignCenter)
-        img.setMinimumSize(512, 256)
-        v.addWidget(img, 1)
-        info = QtWidgets.QLabel("")
-        info.setStyleSheet("color:#9aa0a6;")
-        v.addWidget(info)
-
-        prow = QtWidgets.QHBoxLayout()
-        pv = QtWidgets.QPushButton("Preview")
-        load = QtWidgets.QPushButton("Load into viewport")
-        load.setObjectName("primary")
-        close = QtWidgets.QPushButton("Close")
-
-        def reproject(then):
-            src = src_edit.text().strip()
-            if not src or not os.path.exists(src):
-                info.setText("Pick a valid DayZ env image.")
-                return
-            py = self.s.get("python") or detect_python()[0]
-            if not py:
-                info.setText("Set 'Python' (numpy + pillow) in Settings first.")
-                return
-            rot = rot_cb.currentText().rstrip("°") or "0"
-            tiles = tiles_cb.currentText()
-            gain = gain_cb.currentText()
-            self.s["env_dayz_src"] = src
-            self.s["env_dayz_tiles"] = tiles
-            self.s["env_dayz_mirror"] = mirror_cb.isChecked()
-            self.s["env_dayz_rot"] = rot
-            self.s["env_dayz_gain"] = gain
-            save_settings(self.s)
-            out = os.path.join(tempfile.gettempdir(), "rwg_preview",
-                               "dayz_env_equirect.png")
-            args = ["--reproject-env", src, "--reproject-out", out,
-                    "--reproject-tiles", tiles, "--reproject-rot", rot,
-                    "--reproject-gain", gain]
-            if not mirror_cb.isChecked():
-                args += ["--reproject-no-mirror"]
-            for b in (pv, load):
-                b.setEnabled(False)
-            info.setText("Reprojecting…")
-
-            def work():
-                return _exec_cli(py, args, splog.info)
-
-            def done(res, err):
-                try:
-                    if err is not None:
-                        info.setText(f"Error: {err}")
-                        return
-                    res = res if isinstance(res, dict) else {}
-                    env = res.get("env")                      # .hdr for loading
-                    preview = res.get("env_preview") or env   # .png for display
-                    if not env or not os.path.exists(env):
-                        info.setText("Reproject produced nothing - see Log.")
-                        return
-                    pm = QtGui.QPixmap(preview)
-                    if not pm.isNull():
-                        img.setPixmap(pm.scaled(512, 256, QtCore.Qt.KeepAspectRatio,
-                                                QtCore.Qt.SmoothTransformation))
-                    info.setText(os.path.basename(env))
-                    if then:
-                        then(env)
-                finally:
-                    for b in (pv, load):
-                        b.setEnabled(True)
-
-            self._run_bg(work, done)
-
-        def do_load(path):
-            try:
-                rid = spresource.import_session_resource(path, usage).identifier()
-                spdisplay.set_environment_resource(rid)
-                info.setText(f"Viewport environment set from {os.path.basename(path)}.")
-                self.status.setText("DayZ env loaded into the viewport.")
-            except Exception as e:
-                splog.error(f"[RwG] dayz env load: {e}")
-                info.setText(f"Load error: {e}")
-
-        pv.clicked.connect(lambda: reproject(None))
-        load.clicked.connect(lambda: reproject(do_load))
-        close.clicked.connect(dlg.accept)
-        prow.addWidget(pv)
-        prow.addStretch(1)
-        prow.addWidget(load)
-        prow.addWidget(close)
-        v.addLayout(prow)
-        (getattr(dlg, "exec", None) or getattr(dlg, "exec_"))()
-
-    def on_set_tone(self, name):
-        """Set Painter's viewport tone mapping (ACES / Linear)."""
-        if spdisplay is None:
-            self.status.setText("Display API not available in this Painter version.")
-            return
-        tmf = getattr(spdisplay, "ToneMappingFunction", None)
-        val = getattr(tmf, name, None) if tmf is not None else None
-        if val is None:
-            self.status.setText(f"Tone mapping '{name}' not available.")
-            return
-        try:
-            spdisplay.set_tone_mapping(val)
-            self.s["env_tone"] = name
-            save_settings(self.s)
-            self.status.setText(f"Viewport tone mapping: {name}.")
-        except Exception as e:
-            splog.error(f"[RwG] tone: {e}")
-            self.status.setText(f"Tone error: {e}")
-
-    def _reproject_and_load_env(self, src, tiles, mirror, rot, gain="2.0", tone=None):
-        """Wrap the DayZ env plate to an equirect (background) and load it as the
-        viewport environment; optionally also set the tone mapping."""
-        if spdisplay is None or spresource is None:
-            self.status.setText("Display API not available in this Painter version.")
-            return
-        if not (src and os.path.exists(src)):
-            self.status.setText("Pick a DayZ env first via 'DayZ env…'.")
-            return
-        py = self.s.get("python") or detect_python()[0]
-        if not py:
-            self.status.setText("Set 'Python' (numpy + pillow) in Settings first.")
-            return
-        out = os.path.join(tempfile.gettempdir(), "rwg_preview",
-                           "dayz_env_equirect.png")
-        args = ["--reproject-env", src, "--reproject-out", out,
-                "--reproject-tiles", str(tiles), "--reproject-rot", str(rot),
-                "--reproject-gain", str(gain)]
-        if not mirror:
-            args += ["--reproject-no-mirror"]
-        self.status.setText("Building DayZ env… (background)")
-
-        def work():
-            return _exec_cli(py, args, splog.info)
-
-        def done(res, err):
-            if err is not None:
-                splog.error(f"[RwG] {err}")
-                self.status.setText(f"Error: {err}")
-                return
-            path = (res or {}).get("env") if isinstance(res, dict) else None
-            if not path or not os.path.exists(path):
-                self.status.setText("Reproject produced nothing - see Log.")
-                return
-            try:
-                usage = getattr(spresource.Usage, "ENVIRONMENT", None)
-                rid = spresource.import_session_resource(path, usage).identifier()
-                spdisplay.set_environment_resource(rid)
-                if tone:
-                    self.on_set_tone(tone)
-                self.status.setText(
-                    "DayZ look applied (viewport env"
-                    + (f" + {tone} tone" if tone else "") + ").")
-            except Exception as e:
-                splog.error(f"[RwG] env load: {e}")
-                self.status.setText(f"Load error: {e}")
-
-        self._run_bg(work, done)
-
-    def on_dayz_look(self):
-        """One click: build the saved DayZ env (bright HDR), load it as the
-        viewport environment and apply the chosen tone mapping. (The RwG DayZ
-        Super shader stays a manual assignment.)"""
-        if not substance_painter.project.is_open():
-            self.status.setText("Open a project first.")
-            return
-        tone = self.tone_cb.currentText() if hasattr(self, "tone_cb") else "ACES"
-        self._reproject_and_load_env(
-            self.s.get("env_dayz_src", ""),
-            self.s.get("env_dayz_tiles", "3"),
-            bool(self.s.get("env_dayz_mirror", True)),
-            self.s.get("env_dayz_rot", "0"),
-            gain=self.s.get("env_dayz_gain", "2.0"),
-            tone=tone)
-
-    # ------------------------------------------------------------------ #
-    #  config.cpp snippet (hiddenSelectionsMaterials + healthLevels)      #
-    # ------------------------------------------------------------------ #
     @staticmethod
     def _rvmat_with_suffix(path, suffix):
         if not suffix:
@@ -4089,7 +3596,7 @@ class RwGDock(QtWidgets.QWidget):
             p, _ = QtWidgets.QFileDialog.getOpenFileName(
                 dlg, "Choose .rvmat", start, "RVMAT (*.rvmat);;All files (*)")
             if p:
-                path_edit.setText(p)
+                path_edit.setText(self._dp(p))
         browse.clicked.connect(do_browse)
         prow.addWidget(browse)
         v.addLayout(prow)
@@ -4209,6 +3716,8 @@ class RwGDock(QtWidgets.QWidget):
             if paa_files:
                 msg += f", {len(paa_files)} .paa"
             self.status.setText(msg)
+            if s.get("viewer_send_export", True):
+                self._push_viewer(files=paths + paa_files)
         except Exception as e:
             splog.error(f"[RwG] {e}")
             self.status.setText(f"Error: {e}")
@@ -4290,6 +3799,8 @@ class RwGDock(QtWidgets.QWidget):
         self.status.setText(msg)
         if s.get("autofill_on_export", True):
             self._autofill_rvmat(summary, s)
+        if s.get("viewer_send_export", True):
+            self._push_viewer(files=list(summary.get("tga", {}).values()) + list(paa.values()))
 
     def _autofill_rvmat(self, summary, s):
         """Fill the rvmat texture fields from the produced maps (mod-relative,
@@ -4678,8 +4189,6 @@ class RwGDock(QtWidgets.QWidget):
                 content = f.read()
             self.rvmat_path = path
             self._fill_fields_from_rvmat(content)
-            if path not in self.watcher.files():
-                self.watcher.addPath(path)
             if announce:
                 self.status.setText(f"Loaded {os.path.basename(path)}.")
         except Exception as e:
@@ -4718,8 +4227,6 @@ class RwGDock(QtWidgets.QWidget):
             with open(path, "w") as f:
                 f.write(content)
             self.rvmat_path = path
-            if path not in self.watcher.files():
-                self.watcher.addPath(path)
             self.status.setText(f".rvmat written: {os.path.basename(path)}")
         except Exception as e:
             splog.error(f"[RwG] {e}")
@@ -4789,41 +4296,6 @@ class RwGDock(QtWidgets.QWidget):
         except Exception as e:
             splog.error(f"[RwG] {e}")
             self.status.setText(f"Error: {e}")
-
-    def on_open_mateditor(self):
-        s = self._collect()
-        exe = s["mateditor"].strip()
-        if not exe or not os.path.exists(exe):
-            self.status.setText("Set the MatEditor.exe path first."); return
-        # make sure a .rvmat exists to open
-        if not self.rvmat_path or not os.path.exists(self.rvmat_path):
-            self.on_write_rvmat()
-        if not self.rvmat_path or not os.path.exists(self.rvmat_path):
-            return
-        try:
-            subprocess.Popen([exe, self.rvmat_path])
-            # watch the file so edits flow back in
-            if self.rvmat_path not in self.watcher.files():
-                self.watcher.addPath(self.rvmat_path)
-            self.status.setText("Opened in MatEditor - watching for changes.")
-        except Exception as e:
-            splog.error(f"[RwG] {e}")
-            self.status.setText(f"Error: {e}")
-
-    def _on_rvmat_changed(self, path):
-        # editors often replace the file; re-add the watch.
-        if os.path.exists(path) and path not in self.watcher.files():
-            self.watcher.addPath(path)
-        if not self.autosync_cb.isChecked():
-            return
-        try:
-            with open(path) as f:
-                content = f.read()
-            self._fill_fields_from_rvmat(content)
-            self.status.setText("Synced changes from MatEditor.")
-        except Exception as e:
-            splog.warning(f"[RwG] sync failed: {e}")
-
 
 # --------------------------------------------------------------------------- #
 #  plugin entry points                                                         #

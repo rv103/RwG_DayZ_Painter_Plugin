@@ -1,4 +1,4 @@
-"""
+r"""
 Shared helpers for config reading, .tga -> .paa conversion and mod-relative
 path handling. Used by the RwG Texture Converter (and available to the RVMAT
 Creator, which already reads the same config.cfg).
@@ -94,6 +94,57 @@ def tga_to_paa(tga_path, paa_path=None, imagetopaa_exe=None,
     return paa_path
 
 
+_DRIVE_MAPS = {}
+
+
+def _drive_map(drive):
+    """(real folder, drive folder) pairs, longest first, for a work drive such as P:.
+    The drive is usually a subst of a real folder, and mods are linked into it
+    (P:\\MyMod -> E:\\...\\mods\\MyMod, a junction). File dialogs and some tools hand
+    back those real folders; this maps them back."""
+    key = drive.upper()
+    if key in _DRIVE_MAPS:
+        return _DRIVE_MAPS[key]
+    root = drive + "\\"
+    pairs = []
+    try:
+        real_root = os.path.realpath(root)
+        if os.path.normcase(real_root.rstrip("\\")) != os.path.normcase(drive):
+            pairs.append((real_root.rstrip("\\"), drive))
+        for name in os.listdir(root):
+            p = os.path.join(root, name)
+            if not os.path.isdir(p):
+                continue
+            real = os.path.realpath(p)
+            if os.path.normcase(real) != os.path.normcase(os.path.join(real_root, name)):
+                pairs.append((real.rstrip("\\"), drive + "\\" + name))
+    except OSError:
+        pass
+    pairs.sort(key=lambda t: len(t[0]), reverse=True)
+    _DRIVE_MAPS[key] = pairs
+    return pairs
+
+
+def to_drive_path(path, drive_letter=None, config_path="config.cfg"):
+    """The work-drive form of a path: E:\\...\\mods\\MyMod\\data\\x.paa -> P:\\MyMod\\data\\x.paa
+    when P: (or a folder linked into it) points there. Paths already on the drive,
+    or not reachable through it, come back unchanged (normalised)."""
+    if not path:
+        return path
+    if drive_letter is None:
+        drive_letter = read_config(config_path).get("drive_letter", DEFAULT_DRIVE)
+    drive = ntpath.splitdrive(ntpath.normpath(drive_letter))[0] or "P:"
+    p = ntpath.normpath(str(path))
+    if ntpath.splitdrive(p)[0].upper() == drive.upper():
+        return p
+    low = os.path.normcase(p)
+    for real, mapped in _drive_map(drive):
+        r = os.path.normcase(real)
+        if low == r or low.startswith(r + "\\"):
+            return mapped + p[len(real):]
+    return p
+
+
 def mod_relative_path(abs_path, drive_letter=None, config_path="config.cfg"):
     """
     Turn an absolute texture path into the mod-relative path a .rvmat should
@@ -109,7 +160,8 @@ def mod_relative_path(abs_path, drive_letter=None, config_path="config.cfg"):
         drive_letter = read_config(config_path).get("drive_letter", DEFAULT_DRIVE)
 
     # Use ntpath so Windows-style DayZ paths resolve correctly on any host OS.
-    abs_norm = ntpath.normpath(abs_path)
+    # A real folder behind the drive (subst target, linked mod) counts as on it.
+    abs_norm = ntpath.normpath(to_drive_path(abs_path, drive_letter))
     drive_norm = ntpath.splitdrive(ntpath.normpath(drive_letter))[0]  # e.g. 'P:'
     path_drive, path_rest = ntpath.splitdrive(abs_norm)
 

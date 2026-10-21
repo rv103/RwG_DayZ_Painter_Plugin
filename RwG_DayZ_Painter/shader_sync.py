@@ -68,10 +68,59 @@ def params_from_settings(s):
     }
 
 
-def push(params):
-    """Write the parameters into every DayZ In-Game shader instance.
+def _mapping():
+    """Shader instances and which texture set uses which (alg.shaders.shaderInstancesToObject):
+    {"shaders": {name: {"shader": "dayz-ingame", "shaderInstance": name, "parameters": ...}},
+     "texturesets": {texture set: {"shader": instance name}}}"""
+    try:
+        return substance_painter.js.evaluate("alg.shaders.shaderInstancesToObject()") or {}
+    except Exception:
+        return {}                  # no project open
+
+
+def instance_for(texture_set, split=True):
+    """Name of the DayZ In-Game shader instance a texture set uses, or None if it uses
+    another shader. With ``split``, a texture set sharing its instance with others (or
+    still on a default-named one) first gets its own copy ("DayZ <texture set>") - every
+    texture set paints a different .rvmat, so one shared instance would show the same
+    values on all of them."""
+    obj = _mapping()
+    sets, shaders = obj.get("texturesets") or {}, obj.get("shaders") or {}
+    entry = sets.get(texture_set)
+    name = entry.get("shader") if entry else None
+    inst = shaders.get(name) if name else None
+    if not inst or SHADER_TAG not in str(inst.get("shader", "")).lower():
+        return None
+    shared = [ts for ts, e in sets.items() if e.get("shader") == name]
+    # also the last texture set left on a shared default instance ("Main shader")
+    # gets its own, so every texture set ends up on "DayZ <texture set>"
+    if split and (len(shared) > 1 or not name.startswith("DayZ ")):
+        new, i = f"DayZ {texture_set}", 2
+        while new in shaders:
+            new, i = f"DayZ {texture_set} {i}", i + 1
+        copy = json.loads(json.dumps(inst))          # same shader and values to start from
+        copy["shaderInstance"] = new
+        shaders[new] = copy
+        entry["shader"] = new
+        # creates the missing instance and assigns it to this texture set only
+        substance_painter.js.evaluate(f"alg.shaders.shaderInstancesFromObject({json.dumps(obj)})")
+        name = new
+    return name
+
+
+def push(params, texture_set=None):
+    """Write the parameters into the DayZ In-Game shader instance of ``texture_set``
+    (its own one, split off if shared), or into every instance without a texture set.
     Returns the number of instances updated."""
     shaders = _instances()
+    if texture_set:
+        name = instance_for(texture_set)
+        if name is None:
+            return 0
+        shaders = [s for s in _instances() if str(s.get("label", "")).strip().lower() == name.strip().lower()]
+        if not shaders:
+            raise RuntimeError(f"shader instance '{name}' not found among "
+                               f"{[s.get('label') for s in _instances()]}")
     payload = json.dumps(params)
     for sh in shaders:
         substance_painter.js.evaluate(

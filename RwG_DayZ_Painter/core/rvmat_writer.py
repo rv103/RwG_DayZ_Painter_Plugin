@@ -121,146 +121,58 @@ DAMAGE_MC = {
 
 
 # Material presets: ambient, diffuse, forcedDiffuse, emmisive, specular (RGBA),
-# specularPower, fresnel and env. Ported verbatim from the RVMAT Creator so the
-# two tools share one preset table.
+# specularPower, fresnel and env.
+#
+# Checked against the Super shader (RenderDoc-verified rebuild, DayZ Shader project)
+# and the vanilla rvmats (~3400 Super rvmats in weapons/gear/characters):
+#   * ambient[] x sky is the whole ambient light and diffuse[] scales the direct
+#     light of the entire material - both stay 1 (vanilla: ~80 % use 1,1,1,1).
+#     The colour lives in _co; 0 would leave the material black in shade.
+#   * reflection = _smdi G x fresnel(N,K) x specular[]. The plugin's _smdi sets G so
+#     that G x fresnel already gives the pixel's F0 - specular[] must therefore not
+#     carry F0 again: white for non-metals, only the HUE (brightest channel 1) for
+#     coloured metals.
+#   * specularPower <= 400: the highlight stops getting brighter at ~219, and _smdi
+#     B (= exponent / specularPower) is 5-bit in game - higher values crush rough
+#     areas to B = 0. Use the estimate button to fit it to the roughness.
+#   * fresnel: metals = complex-IOR N/K (F0 = their reflectance); non-metals N 1.5,
+#     K 0 (F0 0.04, the physical curve) - also the best _smdi G precision.
+_ENV = "dz\\data\\data\\env_land_co.paa"
+
+
+def _preset(specular, power, n, k):
+    return {"ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
+            "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
+            "specular": specular, "specularPower": float(power),
+            "fresnel": f"#(ai,64,64,1)fresnel({n},{k})", "env": _ENV}
+
+
+_WHITE = (1, 1, 1, 1)
+
 MATERIAL_PRESETS = {
-    "Default": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        # BI Super-shader default specular is white; black would multiply the
-        # _smdi specular to zero (and the MatEditor leaves specularPower inactive).
-        "specular": (1, 1, 1, 1), "specularPower": 30.0,
-        "fresnel": "#(ai,64,64,1)fresnel(0.4,0.2)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Rubber": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 0), "emmisive": (0, 0, 0, 0),
-        "specular": (0.05, 0.05, 0.05, 1), "specularPower": 8.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.48,0.03)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Gold": {
-        # fresnel N/K corrected to the BI Super shader reference (Gold: 0.3, 3)
-        "ambient": (0, 0, 0, 0), "diffuse": (0.20784314, 0.17254902, 0.050980393, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.83529413, 0.81568629, 0.18431373, 1), "specularPower": 800.0,
-        "fresnel": "#(ai,64,64,1)fresnel(0.3,3)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Iron": {
-        # fresnel N/K corrected to the BI Super shader reference (Iron: 3.12, 3.87)
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 0), "emmisive": (0, 0, 0, 0),
-        "specular": (0.4, 0.38, 0.36, 1), "specularPower": 60.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.12,3.87)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Plastic": {
-        "ambient": (0, 0, 0, 0), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 0), "emmisive": (0, 0, 0, 0),
-        "specular": (0.09, 0.09, 0.09, 1), "specularPower": 35.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.5,1.22)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Wood": {
-        "ambient": (0, 0, 0, 0), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 0), "emmisive": (0, 0, 0, 0),
-        "specular": (0.16, 0.16, 0.16, 1), "specularPower": 45.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.5,0.45)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Cloth": {
-        "ambient": (0, 0, 0, 0), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 0), "emmisive": (0, 0, 0, 0),
-        "specular": (0.01, 0.01, 0.01, 1), "specularPower": 2.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.7,2.2)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Car Paint New": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 1),
-        "specular": (0.7, 0.7, 0.7, 1), "specularPower": 172.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.1,0.3)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Car Paint Matte": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 1),
-        "specular": (0.3, 0.3, 0.3, 1), "specularPower": 32.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.1,0.3)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    # ----- metals, fresnel N/K from the BI Super shader reference table ----- #
-    "Aluminum": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.91, 0.92, 0.92, 1), "specularPower": 220.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.3,7)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Copper": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.95, 0.64, 0.54, 1), "specularPower": 200.0,
-        "fresnel": "#(ai,64,64,1)fresnel(2.08,7.15)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Brass": {
-        # copper-zinc alloy: warm yellow reflectance sitting between Copper
-        # (redder) and Gold (purer yellow). Colour rides in the specular tint;
-        # fresnel N/K keep the reflectance a touch below gold. Good for cartridge
-        # cases - lower specularPower for worn/matte brass.
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.91, 0.74, 0.42, 1), "specularPower": 200.0,
-        "fresnel": "#(ai,64,64,1)fresnel(0.44,3.0)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Silver": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.97, 0.96, 0.91, 1), "specularPower": 300.0,
-        "fresnel": "#(ai,64,64,1)fresnel(0.2,3)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Steel": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.56, 0.57, 0.58, 1), "specularPower": 180.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.12,3.87)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Titanium": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.76, 0.73, 0.69, 1), "specularPower": 250.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.21,4.01)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Nickel": {
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.83, 0.80, 0.75, 1), "specularPower": 260.0,
-        "fresnel": "#(ai,64,64,1)fresnel(2.59,4.55)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Chrome": {
-        # chromium is not in the BI table; N/K approximated (~3.0 / 3.3)
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.90, 0.91, 0.92, 1), "specularPower": 600.0,
-        "fresnel": "#(ai,64,64,1)fresnel(3.0,3.3)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
-    "Glass": {
-        # dielectric: N ~ 1.5, K ~ 0
-        "ambient": (1, 1, 1, 1), "diffuse": (1, 1, 1, 1),
-        "forcedDiffuse": (0, 0, 0, 1), "emmisive": (0, 0, 0, 0),
-        "specular": (0.25, 0.25, 0.25, 1), "specularPower": 400.0,
-        "fresnel": "#(ai,64,64,1)fresnel(1.5,0.0)",
-        "env": "dz\\data\\data\\env_land_co.paa",
-    },
+    # BI's default fresnel (F0 0.2): fits mixed texture sets up to F0 0.2.
+    "Default":         _preset(_WHITE, 30, 0.4, 0.2),
+    # ----- non-metals: specular white, fresnel N 1.5 / K 0 (F0 0.04) ----- #
+    "Rubber":          _preset(_WHITE, 8, 1.5, 0),
+    "Plastic":         _preset(_WHITE, 35, 1.5, 0),
+    "Wood":            _preset(_WHITE, 45, 1.5, 0.45),          # F0 0.07, slightly flatter curve
+    "Cloth":           _preset(_WHITE, 4, 1.5, 0),
+    "Car Paint New":   _preset(_WHITE, 172, 1.5, 0),            # clear coat
+    "Car Paint Matte": _preset(_WHITE, 32, 1.5, 0),
+    "Glass":           _preset(_WHITE, 400, 1.5, 0),
+    # ----- metals: N/K from the BI Super shader table, specular = hue only ----- #
+    "Gold":            _preset((1.0, 0.78, 0.34, 1), 400, 0.3, 3),
+    "Iron":            _preset((0.97, 0.98, 1.0, 1), 60, 3.12, 3.87),
+    "Aluminum":        _preset((0.99, 1.0, 1.0, 1), 220, 1.3, 7),
+    "Copper":          _preset((1.0, 0.67, 0.57, 1), 200, 2.08, 7.15),
+    # copper-zinc alloy, between copper (redder) and gold; good for cartridge cases
+    "Brass":           _preset((1.0, 0.81, 0.46, 1), 200, 0.44, 3.0),
+    "Silver":          _preset((1.0, 0.99, 0.94, 1), 300, 0.2, 3),
+    "Steel":           _preset((0.97, 0.98, 1.0, 1), 180, 3.12, 3.87),
+    "Titanium":        _preset((1.0, 0.96, 0.91, 1), 250, 3.21, 4.01),
+    "Nickel":          _preset((1.0, 0.96, 0.90, 1), 260, 2.59, 4.55),
+    # chromium is not in the BI table; N/K approximated (~3.0 / 3.3)
+    "Chrome":          _preset((0.98, 0.99, 1.0, 1), 400, 3.0, 3.3),
 }
 
 
@@ -296,27 +208,28 @@ _PRESET_FRESNEL_NAMES = ("Gold", "Iron", "Aluminum", "Copper", "Brass", "Silver"
                          "Steel", "Titanium", "Nickel", "Chrome")
 
 # Extra materials NOT in the preset table. N/K are representative visible-band
-# values from refractiveindex.info (single scalar for the DayZ fresnel stage);
-# specular[] is the material's reflectance tint. Dielectrics have K = 0, so their
-# whole look rides on N -> a low F0 (e.g. glass 0.04, MgO ~0.073, diamond ~0.17).
-# The metal N/K here are approximate - refine per material if you need exact.
+# values from refractiveindex.info (single scalar for the DayZ fresnel stage).
+# specular[] is only the HUE of a coloured metal (brightest channel 1) and white
+# otherwise: the fresnel stage and the _smdi G already carry the reflectance, so a
+# grey F0 in specular[] would apply it twice. Dielectrics have K = 0, so their look
+# rides on N -> a low F0 (glass 0.04, MgO ~0.073, diamond ~0.17).
 FRESNEL_EXTRA = {
     # --- additional metals / alloys ---
-    "Bronze":          {"n": 1.18, "k": 3.5, "specular": (0.80, 0.57, 0.37, 1)},
-    "Zinc":            {"n": 1.0,  "k": 5.0, "specular": (0.80, 0.83, 0.85, 1)},
-    "Tin":             {"n": 1.5,  "k": 5.0, "specular": (0.79, 0.78, 0.74, 1)},
-    "Lead":            {"n": 2.0,  "k": 3.4, "specular": (0.63, 0.63, 0.66, 1)},
-    "Platinum":        {"n": 2.33, "k": 4.0, "specular": (0.67, 0.64, 0.58, 1)},
-    "Cobalt":          {"n": 2.2,  "k": 4.0, "specular": (0.66, 0.66, 0.64, 1)},
-    "Tungsten":        {"n": 3.6,  "k": 2.8, "specular": (0.50, 0.50, 0.50, 1)},
+    "Bronze":          {"n": 1.18, "k": 3.5, "specular": (1.0, 0.71, 0.46, 1)},
+    "Zinc":            {"n": 1.0,  "k": 5.0, "specular": (0.94, 0.98, 1.0, 1)},
+    "Tin":             {"n": 1.5,  "k": 5.0, "specular": (1.0, 0.99, 0.94, 1)},
+    "Lead":            {"n": 2.0,  "k": 3.4, "specular": (0.95, 0.95, 1.0, 1)},
+    "Platinum":        {"n": 2.33, "k": 4.0, "specular": (1.0, 0.96, 0.87, 1)},
+    "Cobalt":          {"n": 2.2,  "k": 4.0, "specular": (1.0, 1.0, 0.97, 1)},
+    "Tungsten":        {"n": 3.6,  "k": 2.8, "specular": _WHITE},
     # --- dielectrics (K = 0; F0 comes from N) ---
-    "Glass (n1.5)":    {"n": 1.5,  "k": 0.0, "specular": (0.25, 0.25, 0.25, 1)},
-    "Water (n1.33)":   {"n": 1.33, "k": 0.0, "specular": (0.15, 0.15, 0.15, 1)},
-    "Ice (n1.31)":     {"n": 1.31, "k": 0.0, "specular": (0.14, 0.14, 0.14, 1)},
-    "MgO (n1.74)":     {"n": 1.74, "k": 0.0, "specular": (0.30, 0.30, 0.30, 1)},
-    "Sapphire (n1.77)": {"n": 1.77, "k": 0.0, "specular": (0.31, 0.31, 0.31, 1)},
-    "Quartz (n1.55)":  {"n": 1.55, "k": 0.0, "specular": (0.26, 0.26, 0.26, 1)},
-    "Diamond (n2.42)": {"n": 2.42, "k": 0.0, "specular": (0.55, 0.55, 0.55, 1)},
+    "Glass (n1.5)":    {"n": 1.5,  "k": 0.0, "specular": _WHITE},
+    "Water (n1.33)":   {"n": 1.33, "k": 0.0, "specular": _WHITE},
+    "Ice (n1.31)":     {"n": 1.31, "k": 0.0, "specular": _WHITE},
+    "MgO (n1.74)":     {"n": 1.74, "k": 0.0, "specular": _WHITE},
+    "Sapphire (n1.77)": {"n": 1.77, "k": 0.0, "specular": _WHITE},
+    "Quartz (n1.55)":  {"n": 1.55, "k": 0.0, "specular": _WHITE},
+    "Diamond (n2.42)": {"n": 2.42, "k": 0.0, "specular": _WHITE},
 }
 
 
@@ -498,13 +411,10 @@ FRESNEL_REFERENCE = [
 
 
 def suggested_specular(n, k):
-    """A neutral specular[] tint suggested from the material's F0. DayZ items
-    usually carry hue in the _co/_smdi maps and keep specular[] grey, so this
-    returns a grey RGBA scaled to the reflectance strength (tint it yourself for
-    coloured metals like copper/brass/gold)."""
-    v = fresnel_f0(n, k)
-    v = round(max(0.02, min(1.0, v)), 4)
-    return (v, v, v, 1)
+    """specular[] for a fresnel(N,K) picked from the reference table: white. The
+    stage and the _smdi G already carry the reflectance (F0), so specular[] only
+    tints - give a coloured metal its hue yourself (brightest channel 1)."""
+    return _WHITE
 
 
 def fresnel_reference_flat():
