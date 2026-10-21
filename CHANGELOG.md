@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.5.0b — Preview (2026-08-21)
+
+Responsiveness + a live map preview inside Painter.
+
+### Preview
+
+- **In-Painter map preview.** Every map row has a small **eye button** (after its
+  resolution) that builds that map from the current project and loads it into a
+  spare **User channel**, so you can inspect the real packed texture in Painter's
+  2D view — no export needed. Works for `_co` / `_nohq` / `_smdi` / `_dtsmdi` /
+  `_as` / `_em` / `_mc`; the **✕** in the header row removes the preview.
+
+### Link to the DayZ In-Game viewport shader
+
+- **Live to DayZ In-Game shader** (RVMAT tab, under *Viewport tone*): the material
+  values (`ambient` … `specularPower`, fresnel N/K), the `_smdi` method, the G/B
+  sliders and the macro source go live to every texture set using the
+  `dayz-ingame` viewport shader (RwG DayZ SP Shader). **From shader** takes values
+  tried in the shader's settings back into the panel. Uses Painter's JS shader
+  API (`alg.shaders`), as the Python API has no shader access.
+
+### DayZ shader-matched _smdi (new default)
+
+- New `_smdi` / `_dtsmdi` method **DayZ shader-matched**, measured against the game's
+  Super shader (RenderDoc captures):
+  - **G** is the pixel's F0 *relative to the rvmat fresnel stage* (which already carries
+    F0), times gloss. The older methods write F0 into G, which the shader multiplies with
+    the fresnel stage again - reflections came out up to ~25x too weak.
+  - **B** is the GGX-equivalent Blinn-Phong exponent (2/r⁴ − 2) divided by the rvmat
+    `specularPower`, instead of a linear 1 − roughness.
+  - The engine brightens the highlight by ~0.11 × `specularPower` for the whole material;
+    G × B compensates per pixel, so rough areas no longer glow like polished ones.
+  - Uses `specularPower` and fresnel N/K from the Material panel. The specularPower
+    estimate button sizes it for the smoothest part of the material (max 400, because
+    `_smdi` is BC1 in game and a larger value would crush the rough range).
+- The previous methods stay available (glTF, PBR, Met+Rough, Spec+Gloss).
+
+### Performance
+
+- **No more UI freeze.** The heavy numpy/Pillow conversion now runs on a
+  **background thread** — the export, the preview and the `.tga → .paa` batch keep
+  Painter responsive (a "working in the background" status instead of a freeze),
+  reporting back when done. A busy-guard prevents overlapping jobs.
+- On Windows the external converter runs with **no console window** (no more
+  flashing command prompt).
+
 ## v0.4.5b — Preview (2026-08-21)
 
 A follow-up to v0.4.3: a detail-strength control, a tidier Maps / Export layout,

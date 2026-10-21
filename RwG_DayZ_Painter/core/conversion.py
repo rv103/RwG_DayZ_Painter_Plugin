@@ -58,6 +58,84 @@ def _save(arr01, output_path, resolution=None):
     return output_path
 
 
+def _save_hdr(rgb, path):
+    """Write a linear float RGB image (values may exceed 1) as a Radiance .hdr
+    (uncompressed RGBE) so it works as a real IBL environment."""
+    rgb = np.asarray(rgb, dtype=np.float32)
+    rgb = np.maximum(rgb, 0.0)
+    bright = rgb.max(axis=2)
+    mant, expo = np.frexp(bright)                    # bright = mant * 2**expo
+    scale = np.where(bright > 1e-32, mant * 256.0 / bright, 0.0)
+    rgbe = np.zeros(rgb.shape[:2] + (4,), dtype=np.uint8)
+    rgbe[..., 0:3] = np.clip(rgb * scale[..., None], 0, 255).astype(np.uint8)
+    rgbe[..., 3] = np.clip(expo + 128, 0, 255).astype(np.uint8)
+    rgbe[bright <= 1e-32] = 0
+    h, w = rgb.shape[:2]
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
+        f.write(f"-Y {h} +X {w}\n".encode("ascii"))
+        rgbe.tofile(f)
+    return path
+
+
+def wrap_plate_array(src_path, tiles=3, mirror=True, rotation_deg=0.0,
+                     out_w=1024, out_h=512, gain=1.0):
+    """Wrap a DayZ landscape env plate into an equirectangular float panorama.
+
+    DayZ ``env_*_co`` maps are not fisheye or panoramic - they're a flat
+    landscape plate (sky on top, horizon in the middle, ground at the bottom).
+    We tile the plate horizontally ``tiles`` times (``mirror`` flips alternate
+    copies so the seams vanish) and map the plate's vertical straight onto the
+    equirect vertical (top = sky, bottom = ground). ``rotation_deg`` shifts it
+    horizontally; ``gain`` scales brightness (for IBL energy). Returns a float
+    HxWx3 array (values may exceed 1 when gain > 1).
+    """
+    plate = _load_rgb(src_path)                     # H,W,3 in 0..1
+    sh, sw = plate.shape[:2]
+    ow, oh = int(out_w), int(out_h)
+    tiles = max(1, int(tiles))
+
+    xs = np.arange(ow, dtype=np.float64)
+    ys = np.arange(oh, dtype=np.float64)
+    X, Y = np.meshgrid(xs, ys)
+
+    shift = (float(rotation_deg) / 360.0) * ow
+    xr = np.mod(X + shift, ow)
+    p = (xr / ow) * tiles
+    k = np.floor(p).astype(np.int64)
+    f = p - k
+    if mirror:
+        f = np.where(k % 2 == 1, 1.0 - f, f)
+    sx = f * (sw - 1)
+    sy = (Y / oh) * (sh - 1)
+
+    x0 = np.clip(np.floor(sx).astype(np.int64), 0, sw - 1)
+    x1 = np.clip(x0 + 1, 0, sw - 1)
+    y0 = np.clip(np.floor(sy).astype(np.int64), 0, sh - 1)
+    y1 = np.clip(y0 + 1, 0, sh - 1)
+    wx = (sx - x0)[..., None]
+    wy = (sy - y0)[..., None]
+    top = plate[y0, x0] * (1 - wx) + plate[y0, x1] * wx
+    bot = plate[y1, x0] * (1 - wx) + plate[y1, x1] * wx
+    out = top * (1 - wy) + bot * wy                 # H,W,3
+    return out.astype(np.float32) * float(gain)
+
+
+def wrap_plate_to_equirect(src_path, output_path, tiles=3, mirror=True,
+                           rotation_deg=0.0, out_w=1024, out_h=512, gain=1.0):
+    """Wrap the plate and save it. A `.hdr` output keeps the (gained) float values
+    for proper IBL brightness; any other extension is written as a clamped PNG."""
+    out = wrap_plate_array(src_path, tiles, mirror, rotation_deg, out_w, out_h, gain)
+    if str(output_path).lower().endswith(".hdr"):
+        return _save_hdr(out, output_path)
+    out8 = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    Image.fromarray(out8, "RGB").save(output_path)
+    return output_path
+
+
 def convert_co_texture(base_color_path, metal_path, output_path,
                        use_specular_conversion=False, resolution=1024,
                        spec_gloss=False):
@@ -405,6 +483,85 @@ def convert_smdi_direct(spec_path, gloss_path, output_path,
         raise
 
 
+# --- DayZ shader-correct _smdi ------------------------------------------------
+# Measured against the game (RenderDoc captures of DayZDiag, DayZ Shader project):
+#   * the Super shader weights every reflection with ks = SMDI.G x Fresnel(N.V), and the
+#     rvmat's fresnel(n,k) stage already carries F0 (physical complex-IOR Fresnel). So G is
+#     the fraction of that stage's reflectance, not F0 itself - writing F0 into G applies it
+#     twice (a dielectric ends up ~25x too dull);
+#   * the highlight exponent is SMDI.B x specularPower (unnormalised Blinn-Phong), and the
+#     engine scales the highlight by ~0.11 x specularPower for the whole material. Multiplying
+#     G by B makes that roughly energy-conserving per pixel.
+
+def fresnel_f0(n, k=0.0):
+    """Reflectance at normal incidence of the fresnel(n,k) stage."""
+    n, k = float(n), float(k)
+    return ((n - 1.0) ** 2 + k * k) / ((n + 1.0) ** 2 + k * k)
+
+
+def dayz_gloss(rough, specular_power):
+    """_smdi B for a roughness map: the GGX-equivalent Blinn-Phong exponent 2/r^4 - 2,
+    as a fraction of the rvmat's specularPower (clipped to 0..1)."""
+    r = np.clip(rough, 0.02, 1.0)
+    return np.clip((2.0 / r ** 4 - 2.0) / max(float(specular_power), 1.0), 0.0, 1.0)
+
+
+def dayz_specular_power(rough, cap=400.0):
+    """specularPower that the smoothest part of a roughness map needs (5th percentile),
+    so dayz_gloss() does not clip. Capped: _smdi ends up BC1 in game (5-bit blue), so a
+    huge specularPower would crush every rough area into the lowest steps; the engine's
+    highlight brightness stops growing at ~219 anyway."""
+    r = max(float(np.percentile(rough, 5)), 0.02)
+    return float(min(cap, max(1.0, round(2.0 / r ** 4 - 2.0))))
+
+
+def _dayz_green(metal, rough, base_lin, specular_power, fresnel_n, fresnel_k, normalize):
+    """_smdi G: the pixel's F0 (glTF: mix(0.04, base colour, metallic), perceived
+    brightness) relative to the fresnel stage's F0, times B for energy."""
+    if base_lin is None:
+        level = DIELECTRIC_F0 + (1.0 - DIELECTRIC_F0) * metal
+    else:
+        m = metal[..., None]
+        level = _perceived_brightness(base_lin * m + (1.0 - m) * DIELECTRIC_F0)
+    green = level / max(fresnel_f0(fresnel_n, fresnel_k), 1e-3)
+    if normalize:
+        green = green * dayz_gloss(rough, specular_power)
+    return green
+
+
+def convert_smdi_dayz(metal_path, roughness_path, basecolor_path, output_path,
+                      specular_power=100.0, fresnel_n=1.5, fresnel_k=0.0,
+                      normalize_highlight=True, specular_factor=1.0,
+                      glossiness_factor=1.0, resolution=1024):
+    """
+    _smdi matched to the DayZ Super shader (see the notes above).
+
+        R = 1.0 (white)
+        G = F0_pixel / F0(fresnel stage)  [x B with normalize_highlight]
+        B = (2 / roughness^4 - 2) / specularPower
+
+    specular_power and fresnel_n/k must be the values written into the rvmat.
+    The base colour is optional (without it every metal gets a flat F0 of 1).
+    """
+    try:
+        if not (metal_path and roughness_path):
+            raise ValueError("metallic and roughness are required for the DayZ _smdi method.")
+        metal = _load_gray(metal_path)
+        rough = _load_gray(roughness_path)
+        base_lin = _srgb_to_linear(_load_rgb(basecolor_path)) if basecolor_path else None
+        red = np.ones_like(rough)
+        green = np.clip(_dayz_green(metal, rough, base_lin, specular_power, fresnel_n,
+                                    fresnel_k, normalize_highlight) * specular_factor, 0.0, 1.0)
+        blue = np.clip(dayz_gloss(rough, specular_power) * glossiness_factor, 0.0, 1.0)
+        _save(np.stack([red, green, blue], axis=2), output_path, resolution)
+        print(f"_smdi saved (DayZ shader, specularPower {specular_power}, "
+              f"fresnel F0 {fresnel_f0(fresnel_n, fresnel_k):.3f}): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating _smdi (DayZ) texture: {e}")
+        raise
+
+
 def _detail_from_maps(detail_paths, shape_hw, strength=1.0):
     """A DT-style grayscale detail channel (average ~0.5, high-frequency) combined
     from one or more height / normal sources, for the _dtsmdi R channel.
@@ -441,7 +598,9 @@ def _detail_from_maps(detail_paths, shape_hw, strength=1.0):
 def convert_dtsmdi(metal_path, roughness_path, output_path, method="gltf",
                    basecolor_path=None, spec_path=None, gloss_path=None,
                    detail_paths=None, detail_strength=1.0,
-                   specular_factor=1.0, glossiness_factor=1.0, resolution=1024):
+                   specular_factor=1.0, glossiness_factor=1.0, resolution=1024,
+                   specular_power=100.0, fresnel_n=1.5, fresnel_k=0.0,
+                   normalize_highlight=True):
     """
     _dtsmdi (Detail + SMDI) - the SMDI variant used by the DayZ Multimaterial
     shader, which packs a tiling detail map into the R channel:
@@ -452,11 +611,21 @@ def convert_dtsmdi(metal_path, roughness_path, output_path, method="gltf",
         B = gloss = 1 - roughness
 
     ``method`` selects the green (specular level) exactly like the _smdi
-    variants: 'gltf' | 'pbr' | 'metrough' | 'specgloss'.
+    variants: 'dayz' | 'gltf' | 'pbr' | 'metrough' | 'specgloss'.
     """
     try:
         # --- green + blue: identical maths to the matching _smdi variant ---
-        if method == "specgloss":
+        if method == "dayz":
+            if not (metal_path and roughness_path):
+                raise ValueError("dtsmdi 'dayz' needs metallic + roughness.")
+            metal = _load_gray(metal_path)
+            rough = _load_gray(roughness_path)
+            base_lin = _srgb_to_linear(_load_rgb(basecolor_path)) if basecolor_path else None
+            green = np.clip(_dayz_green(metal, rough, base_lin, specular_power, fresnel_n,
+                                        fresnel_k, normalize_highlight) * specular_factor,
+                            0.0, 1.0)
+            blue = np.clip(dayz_gloss(rough, specular_power) * glossiness_factor, 0.0, 1.0)
+        elif method == "specgloss":
             if not (spec_path and gloss_path):
                 raise ValueError("dtsmdi 'specgloss' needs spec + gloss maps.")
             green = np.clip(_load_gray(spec_path) * specular_factor, 0.0, 1.0)

@@ -334,6 +334,190 @@ def fresnel_materials():
     return out
 
 
+# --------------------------------------------------------------------------- #
+#  Fresnel reference library (community N/K table)                             #
+# --------------------------------------------------------------------------- #
+# A broad reference of commonly-used refractive values (N) and absorption (K)
+# for DayZ rvmat fresnel stages, grouped by category, each with a short look
+# note so you can match your texture maps. This is a *reference* table shown in
+# its own picker - it does NOT replace the curated BI-correct preset metals
+# above (their N/K come from the BI Super shader reference and can differ).
+#
+# Credit: shared by the community (thanks to @|RaG| Tyson for highlighting how
+# much the fresnel value matters). N/K are representative, not lab-exact -
+# treat them as tuned starting points. BI reference:
+#   https://community.bistudio.com/wiki/Super_shader
+#
+# Structure: [(category, [(name, n, k, description), ...]), ...]
+FRESNEL_REFERENCE = [
+    ("Construction & Terrain", [
+        ("Concrete (dry)", 1.52, 0.07, "Matte, light gray; slightly porous, low reflection"),
+        ("Concrete (wet)", 1.55, 0.09, "Darker, glossy patches; moist, shallow reflection"),
+        ("Cement Paste (fresh)", 1.53, 0.06, "Damp, smooth, slightly reflective"),
+        ("Asphalt (dry)", 1.60, 0.10, "Rough, dark gray; moderate reflection on flat angles"),
+        ("Asphalt (wet)", 1.65, 0.13, "Shiny, dark, strong specular spots"),
+        ("Brick (old)", 1.58, 0.07, "Matte, dusty; low reflectivity"),
+        ("Brick (new)", 1.60, 0.05, "Slightly smoother, semi-matte surface"),
+        ("Terracotta", 1.56, 0.05, "Warm red-orange, matte, porous texture"),
+        ("Clay (dry)", 1.54, 0.05, "Light tan, powdery matte finish"),
+        ("Clay (wet)", 1.57, 0.08, "Darker brown, glossy and sticky appearance"),
+        ("Mud (wet)", 1.60, 0.09, "Wet, reflective, soft surface with depth"),
+        ("Soil (dry)", 1.52, 0.06, "Matte, granular, earthy tone"),
+        ("Soil (moist)", 1.55, 0.09, "Slightly glossy, darkened color"),
+        ("Gravel", 1.58, 0.06, "Mixed reflection, semi-matte"),
+        ("Rock (granite)", 1.60, 0.02, "Hard, slightly speckled, low gloss"),
+        ("Rock (limestone)", 1.63, 0.00, "Light surface, minimal absorption, matte"),
+        ("Slate", 1.61, 0.05, "Smooth, gray-black, subtle sheen"),
+        ("Moss-covered stone", 1.50, 0.10, "Dull, uneven gloss, soft diffuse reflection"),
+        ("Wet road (asphalt)", 1.66, 0.13, "Glossy wet specular; mirror-like patches"),
+        ("Puddle water (on asphalt)", 1.333, 0.00, "Transparent thin layer; strong reflections"),
+    ]),
+    ("Organic & Natural", [
+        ("Wood (dry pine)", 1.53, 0.03, "Light, fibrous, matte"),
+        ("Wood (wet oak)", 1.56, 0.08, "Glossy, darker wood grain visible"),
+        ("Bark (dry)", 1.54, 0.04, "Rough, fibrous, matte"),
+        ("Bark (wet)", 1.57, 0.08, "Damp, darker color, increased gloss"),
+        ("Leaf (fresh)", 1.42, 0.03, "Semi-gloss green, translucent"),
+        ("Leaf (dry)", 1.45, 0.06, "Brittle, matte brown surface"),
+        ("Grass (fresh)", 1.44, 0.02, "Smooth sheen; bright green"),
+        ("Grass (wet)", 1.47, 0.05, "Glossy; darker saturation"),
+        ("Bone", 1.56, 0.01, "Hard, pale surface, slight sheen"),
+        ("Skin (dry)", 1.42, 0.02, "Soft, diffuse reflection"),
+        ("Skin (moist)", 1.45, 0.05, "Subtle gloss, smooth highlights"),
+        ("Skin (oily/wet)", 1.47, 0.08, "Stronger specular shine; reflective patches"),
+        ("Muscle tissue", 1.40, 0.05, "Deep red, semi-gloss, subsurface scattering"),
+        ("Fat tissue", 1.46, 0.01, "Pale, translucent, slightly glossy"),
+        ("Blood (fresh)", 1.39, 0.09, "Deep red, shiny, wet surface"),
+        ("Blood (dried)", 1.45, 0.15, "Brown-red, matte, low reflection"),
+        ("Flesh wound (moist)", 1.47, 0.08, "Glossy, dark red, wet sheen"),
+        ("Leather (dry)", 1.55, 0.06, "Matte, textured surface"),
+        ("Leather (oiled)", 1.58, 0.09, "Glossy, darkened color"),
+        ("Leather (worn)", 1.56, 0.07, "Semi-gloss, aged patches"),
+        ("Hair (dark)", 1.55, 0.02, "Slight sheen, soft reflections"),
+        ("Hair (light/blonde)", 1.53, 0.01, "Diffuse reflection, low gloss"),
+        ("Paper (white)", 1.48, 0.00, "Matte, diffuse"),
+        ("Paper (aged)", 1.50, 0.02, "Yellow tint, softer reflection"),
+    ]),
+    ("Metals", [
+        ("Iron", 2.91, 3.36, "Metallic gray, strong reflection"),
+        ("Steel (polished)", 2.50, 3.10, "Bright silver, mirror finish"),
+        ("Steel (brushed)", 2.40, 3.00, "Semi-gloss, linear highlights"),
+        ("Steel (rusted)", 2.20, 2.10, "Matte, reddish-brown oxide layer"),
+        ("Aluminum", 1.44, 7.38, "Silvery-white, strong reflectivity"),
+        ("Copper", 0.64, 2.62, "Reddish metallic, moderate gloss"),
+        ("Brass", 0.40, 2.90, "Yellow metallic, strong reflection"),
+        ("Gold", 0.47, 2.41, "Warm metallic yellow, high reflectivity"),
+        ("Silver", 0.14, 4.02, "Bright, mirror-like"),
+        ("Titanium", 2.49, 3.09, "Dark gray, high reflectivity"),
+        ("Zinc", 0.27, 3.67, "Dull gray metallic"),
+        ("Lead", 1.92, 3.31, "Dark gray, low gloss"),
+        ("Nickel", 1.92, 3.37, "Slightly yellow-silver, moderate gloss"),
+        ("Chromium", 3.17, 3.32, "Hard, shiny silver"),
+        ("Platinum", 2.30, 4.10, "Bright white metallic, mirror-like"),
+    ]),
+    ("Plastics & Synthetics", [
+        ("PVC (rigid)", 1.54, 0.00, "Smooth, matte white"),
+        ("ABS plastic", 1.55, 0.02, "Semi-gloss, colored surface"),
+        ("Nylon", 1.53, 0.02, "Slight gloss, flexible"),
+        ("Polyethylene (PE)", 1.51, 0.00, "Matte, low absorption"),
+        ("Polypropylene (PP)", 1.49, 0.00, "Translucent white, soft sheen"),
+        ("Polystyrene (PS)", 1.59, 0.00, "Clear, glossy plastic"),
+        ("Polycarbonate (PC)", 1.586, 0.00, "Transparent, slightly glossy"),
+        ("Acrylic (PMMA)", 1.490, 0.00, "Clear, glass-like transparency"),
+        ("Epoxy resin (cured)", 1.55, 0.01, "Transparent, glossy"),
+        ("Rubber (natural)", 1.52, 0.10, "Dull black, flexible"),
+        ("Rubber (synthetic)", 1.54, 0.13, "Slight gloss, dark gray"),
+        ("Carbon fiber composite", 1.90, 0.10, "Dark, semi-gloss pattern"),
+        ("Fiberglass", 1.49, 0.00, "Translucent, low gloss"),
+        ("Kevlar", 1.60, 0.05, "Woven texture, matte yellow"),
+    ]),
+    ("Industrial & Misc", [
+        ("Paint (matte)", 1.50, 0.05, "Diffuse, flat finish"),
+        ("Paint (glossy)", 1.55, 0.07, "Glossy, reflective"),
+        ("Oily metal", 1.46, 0.10, "Reflective with smooth sheen"),
+        ("Grease-coated surface", 1.47, 0.08, "Dark, oily reflection"),
+        ("Rust (iron oxide)", 2.42, 2.70, "Dull red-brown metallic, low gloss"),
+        ("Burnt wood (charcoal)", 1.85, 0.30, "Matte black, high absorption"),
+        ("Plastic burn residue", 1.70, 0.40, "Dark glossy, irregular surface"),
+        ("Glass (clear)", 1.52, 0.00, "Transparent, bright reflections"),
+        ("Glass (frosted)", 1.52, 0.00, "Matte diffuse scattering"),
+        ("Cracked glass", 1.52, 0.00, "Fragmented reflections"),
+        ("Oil film (thin)", 1.45, 0.05, "Iridescent color shift, reflective"),
+        ("Wet mud-metal mix", 1.60, 0.12, "Dark, semi-gloss, complex specular"),
+    ]),
+    ("Environmental", [
+        ("Water (clean)", 1.333, 0.00, "Transparent, clear reflections"),
+        ("Water (murky)", 1.34, 0.02, "Slight absorption, low transparency"),
+        ("Snow (clean)", 1.31, 0.00, "White, diffuse scattering"),
+        ("Snow (dirty)", 1.33, 0.02, "Dull brown tint, low reflectance"),
+        ("Ice (clear)", 1.309, 0.00, "Transparent, smooth reflection"),
+        ("Ash", 1.54, 0.10, "Gray, powdery matte"),
+        ("Soot", 1.75, 0.44, "Black, strong light absorption"),
+        ("Blood splatter (fresh)", 1.41, 0.07, "Glossy, deep red"),
+        ("Blood splatter (dried)", 1.46, 0.15, "Matte, brown-red"),
+        ("Slime / mucus", 1.40, 0.05, "Glossy, translucent wet film"),
+        ("Moss (moist)", 1.45, 0.05, "Soft, green semi-gloss"),
+        ("Algae (wet)", 1.42, 0.03, "Green, glossy surface"),
+        ("Burnt soil", 1.58, 0.12, "Dark brown-black, low reflectance"),
+    ]),
+    ("Stones & Gemstones", [
+        ("Diamond", 2.417, 0.00, "Colorless, very high brilliance; strong dispersion"),
+        ("Cubic Zirconia", 2.17, 0.00, "Colorless, glassy; diamond simulant, high sparkle"),
+        ("Sapphire (Al2O3)", 1.77, 0.00, "Transparent, hard; blue varieties common"),
+        ("Ruby (Cr:Al2O3)", 1.77, 0.005, "Transparent red, slight absorption"),
+        ("Emerald (beryl)", 1.58, 0.010, "Rich green, moderate absorption"),
+        ("Beryl (aquamarine)", 1.57, 0.001, "Pale blue-green, very low absorption"),
+        ("Topaz", 1.61, 0.002, "Transparent, various colors, low absorption"),
+        ("Spinel", 1.72, 0.003, "Transparent, bright; various colors"),
+        ("Tourmaline (avg)", 1.64, 0.015, "Strongly colored, dichroic; moderate absorption"),
+        ("Zircon (natural)", 1.92, 0.005, "Bright, high refractive index; various colors"),
+        ("Garnet (almandine)", 1.79, 0.020, "Deep red, noticeable absorption"),
+        ("Garnet (pyrope)", 1.74, 0.010, "Red to pink, moderate absorption"),
+        ("Peridot (olivine)", 1.65, 0.010, "Yellow-green, moderate absorption"),
+        ("Jadeite (jade)", 1.66, 0.010, "Translucent green, waxy luster"),
+        ("Nephrite (jade)", 1.61, 0.010, "Cream to green, fibrous; waxy luster"),
+        ("Jade (generic)", 1.63, 0.010, "Translucent green, waxy luster"),
+        ("Opal (precious)", 1.44, 0.000, "Translucent; play-of-color, minimal absorption"),
+        ("Quartz (amethyst)", 1.55, 0.003, "Purple quartz; very low absorption"),
+        ("Quartz (smoky)", 1.55, 0.005, "Brown/gray quartz; slight absorption"),
+        ("Fluorite", 1.434, 0.000, "Transparent; low dispersion, soft"),
+        ("Calcite", 1.49, 0.000, "Transparent; birefringent (double refraction)"),
+        ("Turquoise", 1.61, 0.020, "Opaque blue-green, matte to waxy"),
+        ("Obsidian (volcanic glass)", 1.50, 0.020, "Dark glass, semi-transparent edges"),
+        ("Obsidian (mahogany)", 1.50, 0.025, "Dark reddish-brown glass; slight absorption"),
+        ("Amber", 1.54, 0.000, "Translucent resin, warm yellow; low absorption"),
+        ("Lapis Lazuli", 1.61, 0.020, "Opaque deep blue; matte to slight sheen"),
+        ("Malachite", 1.66, 0.030, "Opaque green banding; strong absorption"),
+        ("Agate (banded chalcedony)", 1.54, 0.002, "Translucent, waxy; banded patterns"),
+        ("Onyx (black chalcedony)", 1.54, 0.010, "Opaque to translucent black; low gloss"),
+        ("Jasper", 1.54, 0.015, "Opaque chalcedony; earthy colors, matte"),
+        ("Moonstone (feldspar)", 1.52, 0.002, "Translucent, adularescence (sheen)"),
+        ("Labradorite (feldspar)", 1.56, 0.010, "Iridescent labradorescence; semi-translucent"),
+    ]),
+]
+
+
+def suggested_specular(n, k):
+    """A neutral specular[] tint suggested from the material's F0. DayZ items
+    usually carry hue in the _co/_smdi maps and keep specular[] grey, so this
+    returns a grey RGBA scaled to the reflectance strength (tint it yourself for
+    coloured metals like copper/brass/gold)."""
+    v = fresnel_f0(n, k)
+    v = round(max(0.02, min(1.0, v)), 4)
+    return (v, v, v, 1)
+
+
+def fresnel_reference_flat():
+    """Flatten FRESNEL_REFERENCE to an ordered list of dicts for pickers:
+    {category, name, n, k, description, f0}."""
+    rows = []
+    for category, items in FRESNEL_REFERENCE:
+        for name, n, k, desc in items:
+            rows.append({"category": category, "name": name, "n": n, "k": k,
+                         "description": desc, "f0": fresnel_f0(n, k)})
+    return rows
+
+
 def _fmt_vec(vec):
     """Format an RGBA sequence the way the original tool did (bare Python str)."""
     return ",".join(str(v) for v in vec)
@@ -464,6 +648,174 @@ def apply_preset_to_rvmat(text, preset_name):
     text = re.sub(r'(class Stage6\s*\{\s*texture=")[^"]*(")',
                   lambda m: m.group(1) + p["fresnel"] + m.group(2), text, count=1)
     return text
+
+
+# --------------------------------------------------------------------------- #
+#  RVMAT validator / linter                                                    #
+# --------------------------------------------------------------------------- #
+# Severities, ordered worst -> best. The UI colours by these.
+SEV_ERROR = "error"   # will not work / will not load in-game
+SEV_WARN = "warn"     # loads, but probably not what you want
+SEV_INFO = "info"     # heads-up, usually fine
+SEV_OK = "ok"         # explicit pass note
+
+VALID_TEXTURE_EXT = (".paa", ".tga")
+
+# Stages that normally carry a real bitmap. Stage6 (FRESNEL) is procedural by
+# design, so it is not file-checked.
+_REAL_STAGE_KEYS = ("NOHQ", "DT", "MC", "AS", "SMDI", "ENV")
+# Which of those the game shades from a real map often enough that an all-white /
+# procedural default is worth a heads-up rather than silent.
+_EXPECTED_REAL_MAPS = ("NOHQ", "SMDI")
+
+
+def _is_procedural_texture(tex):
+    """True for inline '#(argb,..)color(..)' / '#(ai,..)fresnel(..)' textures."""
+    return bool(tex) and tex.strip().startswith("#(")
+
+
+def _looks_absolute_path(path):
+    """DayZ texture paths must be mod-relative (no drive letter / UNC / POSIX
+    root). Returns True if the path is absolute in any of those senses."""
+    p = (path or "").strip()
+    if not p:
+        return False
+    return (bool(re.match(r"^[A-Za-z]:[\\/]", p))   # P:\... , C:/...
+            or p.startswith("\\\\")                  # UNC \\server\share
+            or p.startswith("/"))                    # POSIX /...
+
+
+def _abs_from_modrel(relpath, drive):
+    """Join a mod-relative texture path onto the work drive, normalising the
+    backslashes DayZ uses to this OS's separator so os.path.exists works on both
+    Windows (inside Painter) and POSIX (unit tests)."""
+    norm = (relpath or "").replace("\\", os.sep).replace("/", os.sep).lstrip(os.sep)
+    drv = (drive or "").rstrip("\\/")
+    return os.path.join(drv, norm) if drv else norm
+
+
+def _sibling_with_ext(abs_path, ext):
+    root, _ = os.path.splitext(abs_path)
+    return root + ext
+
+
+def validate_rvmat(text, drive="P:\\", check_files=True):
+    """
+    Lint the text of a DayZ Super-shader .rvmat and return a list of
+    (severity, area, message) findings. Pure text + filesystem checks - no
+    Substance Painter or paa_tools dependency, so it is unit-testable.
+
+    drive        : the work drive texture paths are relative to (e.g. 'P:\\').
+    check_files  : resolve each real texture path against the drive and report
+                   missing files. Silently downgraded to a note if the drive
+                   folder is not present on this machine.
+    """
+    findings = []
+
+    def add(sev, area, msg):
+        findings.append((sev, area, msg))
+
+    if not (text or "").strip():
+        add(SEV_ERROR, "file", "The .rvmat is empty or could not be read.")
+        return findings
+
+    # -- shader IDs ------------------------------------------------------- #
+    px = re.search(r'PixelShaderID\s*=\s*"([^"]*)"', text)
+    vx = re.search(r'VertexShaderID\s*=\s*"([^"]*)"', text)
+    if not px:
+        add(SEV_ERROR, "shader", 'No PixelShaderID - DayZ will not load this material.')
+    elif px.group(1) != "Super":
+        add(SEV_INFO, "shader",
+            'PixelShaderID="%s" (this tool targets "Super").' % px.group(1))
+    if not vx:
+        add(SEV_ERROR, "shader", "No VertexShaderID - DayZ will not load this material.")
+    elif vx.group(1) != "Super":
+        add(SEV_INFO, "shader",
+            'VertexShaderID="%s" (this tool targets "Super").' % vx.group(1))
+
+    # -- specularPower ---------------------------------------------------- #
+    if not re.search(r"specularPower\s*=\s*[\d.]+\s*;", text):
+        add(SEV_WARN, "material", "specularPower is missing or non-numeric.")
+
+    # -- stages ----------------------------------------------------------- #
+    stages = dict(re.findall(r'class Stage(\d+)\s*\{\s*texture="([^"]*)"', text))
+    present = set(stages.keys())
+    for num, key in sorted(_STAGE_NAMES.items()):
+        if num not in present:
+            sev = SEV_WARN if key in _EXPECTED_REAL_MAPS else SEV_INFO
+            add(sev, "Stage%s/%s" % (num, key),
+                "Stage%s (%s) is missing - the shader falls back to its default."
+                % (num, key))
+    extra = sorted(n for n in present if n not in _STAGE_NAMES)
+    for n in extra:
+        add(SEV_INFO, "Stage%s" % n,
+            "Stage%s is beyond the 7 Super-shader stages - ignored in-game." % n)
+
+    # -- per-stage texture paths ----------------------------------------- #
+    drive_ok = bool(drive) and (not check_files or os.path.isdir(drive.rstrip("\\/")))
+    if check_files and not drive_ok:
+        add(SEV_INFO, "files",
+            "Work drive '%s' not found here - skipped the file-exists checks." % drive)
+
+    for num, tex in sorted(stages.items()):
+        key = _STAGE_NAMES.get(num, num)
+        area = "Stage%s/%s" % (num, key)
+        if _is_procedural_texture(tex):
+            if key in _EXPECTED_REAL_MAPS:
+                add(SEV_INFO, area,
+                    "%s still uses a procedural default (no real %s map)."
+                    % (key, key))
+            continue
+        if not tex.strip():
+            add(SEV_WARN, area, "Empty texture path.")
+            continue
+
+        # colour map wrongly placed in a stage (ENV maps legitimately end _co)
+        if key != "ENV" and re.search(r"_co\b", tex, re.IGNORECASE):
+            add(SEV_WARN, area,
+                "References a _co (colour) map - colour is assigned on the model, "
+                "not in the .rvmat.")
+
+        if "/" in tex:
+            add(SEV_WARN, area, "Uses forward slashes - DayZ expects backslashes.")
+
+        if _looks_absolute_path(tex):
+            add(SEV_ERROR, area,
+                "Absolute path - must be mod-relative (e.g. MyMod\\data\\x_nohq.paa), "
+                "no drive letter.")
+
+        ext = os.path.splitext(tex)[1].lower()
+        if ext == ".tga":
+            add(SEV_WARN, area,
+                "Points at .tga - DayZ loads .paa in-game. Fine for local editing; "
+                "switch to .paa before packing.")
+        elif ext and ext not in VALID_TEXTURE_EXT:
+            add(SEV_ERROR, area, "Unsupported texture extension '%s'." % ext)
+        elif not ext:
+            add(SEV_WARN, area, "Texture path has no file extension.")
+
+        # existence
+        if check_files and drive_ok and not _looks_absolute_path(tex):
+            abs_path = _abs_from_modrel(tex, drive)
+            if os.path.exists(abs_path):
+                continue
+            other = ".tga" if ext == ".paa" else (".paa" if ext == ".tga" else None)
+            if other and os.path.exists(_sibling_with_ext(abs_path, other)):
+                add(SEV_WARN, area,
+                    "Referenced %s not found, but the %s source exists - "
+                    "convert/pack it before use." % (ext, other))
+            elif re.match(r"(?i)^dz[\\/]", tex.strip()):
+                # base-game content - only present if the game is unpacked to the
+                # work drive, so a miss here is expected, not a mod error.
+                add(SEV_INFO, area,
+                    "Base-game texture (dz\\...) not on this drive - fine, the "
+                    "game provides it; unpack DayZ to P: only if you want a preview.")
+            else:
+                add(SEV_ERROR, area, "Texture not found on the work drive: %s" % abs_path)
+
+    if not findings:
+        add(SEV_OK, "file", "No problems found.")
+    return findings
 
 
 def build_rvmat_from_preset(preset_name="Default", nohq=None, dt=None, mc=None,

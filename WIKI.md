@@ -726,6 +726,16 @@ transparent and only your marks show. See the `_mc` walkthrough.
 
 Latest releases; full history in `CHANGELOG.md`.
 
+### v0.5.0b — Preview (2026-08-21)
+
+**Preview** — every map row has a small **eye button** (after its resolution) that
+builds that map (`_co` / `_nohq` / `_smdi` / `_dtsmdi` / `_as` / `_em` / `_mc`)
+from the current project and loads it into a spare **User channel** for inspection
+in Painter's 2D view (no export needed); the **✕** in the header removes it.
+**Performance** — the heavy conversion now runs on
+a **background thread**, so the export, preview and `.tga → .paa` batch no longer
+freeze Painter's UI; on Windows the converter runs with no console window.
+
 ### v0.4.5b — Preview (2026-08-21)
 
 **Maps** — a **Detail (R)** strength slider for `_dtsmdi` (scales the detail

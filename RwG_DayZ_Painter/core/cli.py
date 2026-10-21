@@ -72,6 +72,15 @@ def run(args):
     try:
         if not want_smdi:
             pass
+        elif smdi_mode == "dayz":
+            if args.metallic and args.roughness:
+                result["tga"]["_smdi"] = conversion.convert_smdi_dayz(
+                    args.metallic, args.roughness, args.smdi_basecolor, out("_smdi"),
+                    args.specular_power, args.fresnel_n, args.fresnel_k,
+                    not args.no_highlight_normalize, args.spec, args.gloss, smdi_res)
+            else:
+                result["errors"].append("_smdi (dayz): needs metallic + roughness "
+                                        "(+ base colour for per-metal F0).")
         elif smdi_mode == "gltf":
             if args.metallic and args.roughness and args.smdi_basecolor:
                 result["tga"]["_smdi"] = conversion.convert_smdi_gltf(
@@ -127,7 +136,9 @@ def run(args):
                 detail_paths=args.dtsmdi_detail,
                 detail_strength=args.dtsmdi_strength,
                 specular_factor=args.spec, glossiness_factor=args.gloss,
-                resolution=dt_res)
+                resolution=dt_res, specular_power=args.specular_power,
+                fresnel_n=args.fresnel_n, fresnel_k=args.fresnel_k,
+                normalize_highlight=not args.no_highlight_normalize)
         except Exception as e:
             result["errors"].append(f"_dtsmdi: {e}")
 
@@ -293,8 +304,13 @@ def run_estimate_material(args):
             rough = np.asarray(Image.open(args.roughness).convert("L"), np.float32) / 255.0
             gloss = 1.0 - float(rough.mean())
             res["avg_roughness"] = round(float(rough.mean()), 4)
-            power = 2.0 ** (gloss * 10.0)
-            res["specular_power"] = float(round(min(512.0, max(1.0, power)), 1))
+            if args.estimate_mode == "dayz":
+                # The DayZ _smdi B is a fraction of specularPower: size it for the
+                # smoothest part of the material so the gloss never clips.
+                res["specular_power"] = conversion.dayz_specular_power(rough)
+            else:
+                power = 2.0 ** (gloss * 10.0)
+                res["specular_power"] = float(round(min(512.0, max(1.0, power)), 1))
         if args.emissive:
             em = np.asarray(Image.open(args.emissive).convert("RGB"), np.float32) / 255.0
             lum = 0.2126 * em[..., 0] + 0.7152 * em[..., 1] + 0.0722 * em[..., 2]
@@ -326,14 +342,29 @@ def build_parser():
                    help="Build the _smdi map. Required to produce it; without it "
                         "the _smdi inputs may still be present for --dtsmdi only.")
     p.add_argument("--smdi-mode", dest="smdi_mode", default="auto",
-                   choices=["auto", "specgloss", "metrough", "pbr", "gltf"],
-                   help="How to build _smdi. auto = infer from the maps given.")
+                   choices=["auto", "dayz", "specgloss", "metrough", "pbr", "gltf"],
+                   help="How to build _smdi. auto = infer from the maps given. dayz = matched "
+                        "to the Super shader (needs --specular-power/--fresnel-n/-k of the rvmat).")
+    p.add_argument("--specular-power", dest="specular_power", type=float, default=100.0,
+                   help="rvmat specularPower ('dayz' _smdi/_dtsmdi: B is a fraction of it).")
+    p.add_argument("--fresnel-n", dest="fresnel_n", type=float, default=1.5,
+                   help="rvmat fresnel(N,K) N ('dayz': G is relative to the stage's F0).")
+    p.add_argument("--fresnel-k", dest="fresnel_k", type=float, default=0.0,
+                   help="rvmat fresnel(N,K) K.")
+    p.add_argument("--no-highlight-normalize", dest="no_highlight_normalize",
+                   action="store_true",
+                   help="'dayz': don't multiply G by B (keeps rough reflections brighter, "
+                        "but rough highlights then glow as bright as smooth ones).")
+    p.add_argument("--estimate-mode", dest="estimate_mode", default="classic",
+                   choices=["classic", "dayz"],
+                   help="--estimate-material specularPower: 'dayz' sizes it for the "
+                        "smoothest part of the roughness map.")
     p.add_argument("--smdi-basecolor", dest="smdi_basecolor",
                    help="Raw base colour for the 'pbr' _smdi method (metal F0).")
     p.add_argument("--dtsmdi", action="store_true",
                    help="Also export a _dtsmdi (Detail+SMDI) map for the Multimaterial shader.")
     p.add_argument("--dtsmdi-mode", dest="dtsmdi_mode", default="gltf",
-                   choices=["gltf", "pbr", "metrough", "specgloss"],
+                   choices=["dayz", "gltf", "pbr", "metrough", "specgloss"],
                    help="How to build the _dtsmdi green (specular level), like --smdi-mode.")
     p.add_argument("--dtsmdi-detail", dest="dtsmdi_detail", nargs="+",
                    help="Height/normal source(s) for the _dtsmdi R (detail) channel "
@@ -383,11 +414,55 @@ def build_parser():
                    help="_mc blend mask: 'auto' (from the macro luminance) or a path "
                         "to a grayscale mask. Omit for an opaque (RGB) _mc.")
     p.add_argument("--mc-res", dest="mc_res", type=int)
+    # DayZ env landscape plate -> equirectangular panorama (viewport env)
+    p.add_argument("--reproject-env", dest="reproject_env",
+                   help="Wrap a DayZ env landscape plate into an equirectangular "
+                        "panorama for the SP viewport.")
+    p.add_argument("--reproject-out", dest="reproject_out",
+                   help="Output path for the equirect panorama (.png).")
+    p.add_argument("--reproject-tiles", dest="reproject_tiles", type=int, default=3,
+                   help="How many times to tile the plate around 360 degrees.")
+    p.add_argument("--reproject-no-mirror", dest="reproject_no_mirror",
+                   action="store_true",
+                   help="Don't mirror alternate tiles (seams may show).")
+    p.add_argument("--reproject-w", dest="reproject_w", type=int, default=1024)
+    p.add_argument("--reproject-h", dest="reproject_h", type=int, default=512)
+    p.add_argument("--reproject-rot", dest="reproject_rot", type=float, default=0.0,
+                   help="Horizontal rotation in degrees for the panorama.")
+    p.add_argument("--reproject-gain", dest="reproject_gain", type=float, default=1.0,
+                   help="Brightness/exposure gain for the env (IBL energy).")
     return p
+
+
+def run_reproject_env(args):
+    """Wrap a DayZ env landscape plate into an equirectangular panorama: a real
+    .hdr for loading (proper IBL brightness) plus a .png for previewing."""
+    result = {"env": None, "env_preview": None, "errors": []}
+    try:
+        src = args.reproject_env
+        base = os.path.splitext(args.reproject_out or (os.path.splitext(src)[0]
+                                                       + "_equirect.png"))[0]
+        png = base + ".png"
+        hdr = base + ".hdr"
+        common = dict(tiles=args.reproject_tiles,
+                      mirror=(not args.reproject_no_mirror),
+                      rotation_deg=args.reproject_rot,
+                      out_w=args.reproject_w, out_h=args.reproject_h,
+                      gain=args.reproject_gain)
+        conversion.wrap_plate_to_equirect(src, png, **common)   # clamped preview
+        conversion.wrap_plate_to_equirect(src, hdr, **common)   # float HDR for IBL
+        result["env"] = hdr
+        result["env_preview"] = png
+    except Exception as e:
+        result["errors"].append(f"env: {e}")
+    return result
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.reproject_env:
+        print(json.dumps(run_reproject_env(args), indent=2))
+        return 0
     if args.estimate_fresnel:
         print(json.dumps(run_estimate_fresnel(args), indent=2))
         return 0
