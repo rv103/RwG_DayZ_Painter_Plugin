@@ -613,8 +613,17 @@ def _api_value(obj, attr):
     return v()
 
 
+def _project_open():
+    try:
+        return substance_painter.project.is_open()
+    except Exception:
+        return False
+
+
 def _texture_set_names():
     names = []
+    if not _project_open():         # polled every 250 ms: stay quiet without a project
+        return names
     try:
         if sptexset and hasattr(sptexset, "all_texture_sets"):
             names = [_api_value(ts, "name") for ts in sptexset.all_texture_sets()]
@@ -625,6 +634,8 @@ def _texture_set_names():
 
 def _active_texture_set_name():
     """Name of the CURRENTLY selected texture set (not just the first one)."""
+    if not _project_open():
+        return None
     try:
         if sptexset and hasattr(sptexset, "get_active_stack"):
             stack = sptexset.get_active_stack()
