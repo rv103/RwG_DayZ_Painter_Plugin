@@ -55,7 +55,7 @@ except ImportError:
 QAction = getattr(QtGui, "QAction", None) or QtWidgets.QAction
 
 # Pure-Python core helpers (no numpy) can run inside Painter.
-from .core import rvmat_writer, paa_tools, p3d_reader
+from .core import rvmat_writer, paa_tools, p3d_reader, p3d_assign
 from . import shader_sync
 from . import viewer_link
 
@@ -340,6 +340,7 @@ def load_settings():
         "viewer_p3d": "", "viewer_send_export": True, "viewer_live": True, "viewer_exe": "",
     "viewer_auto": False, "viewer_auto_delay": 5,
         "ts_materials": {},             # texture set name -> rvmat of the model (or a proxy)
+        "ts_exports": {},               # texture set name -> {"output", "prefix"} of its last export
     }
     # global machine/UI keys come from the shared file (tool paths, layout)
     try:
@@ -1144,6 +1145,16 @@ class RwGDock(QtWidgets.QWidget):
         rb.setToolTip("Read the model again (after changing it in Object Builder).")
         rb.clicked.connect(lambda: self._load_model_materials(announce=True))
         trow.addWidget(rb)
+        assign_btn = QtWidgets.QPushButton("Assign to model…")
+        assign_btn.setToolTip(
+            "For a model exported before its materials were assigned (faces without texture and rvmat):\n"
+            "  * every texture set's _co + .rvmat (from its last export, or the current Output folder /\n"
+            "    Prefix) goes to Blender - the DayZ Viewer Link add-on puts them on the Blender materials\n"
+            "    of the same name and exports the P3D again;\n"
+            "  * with a single texture set the plugin can also fill the empty faces of the P3D directly\n"
+            "    (a .bak copy is kept).")
+        assign_btn.clicked.connect(self.on_assign_to_model)
+        trow.addWidget(assign_btn)
         layout.addLayout(trow)
         self.path_check = hint("")
         self.path_check.setTextFormat(QtCore.Qt.RichText)
@@ -2318,9 +2329,11 @@ class RwGDock(QtWidgets.QWidget):
             if model:
                 self.viewer_p3d_edit.setText(model)
         self._model_mats = []
+        self._empty_faces = 0
         if model and os.path.isfile(model):
             try:
                 self._model_mats = p3d_reader.model_materials(model, self.s.get("drive", "P:\\").strip() or "P:\\")
+                self._empty_faces = p3d_assign.empty_face_count(model)
             except Exception as e:
                 self.status.setText(f"Could not read the model: {e}")
         elif announce:
@@ -2335,6 +2348,80 @@ class RwGDock(QtWidgets.QWidget):
             self.status.setText(f"Model read: {len(self._model_mats)} material(s) incl. proxies.")
         self._last_ts = None
         self._sync_texture_set()
+
+    def _remember_ts_export(self, ts, output, prefix):
+        """Where a texture set was exported to - the material assignment uses it later."""
+        if not ts or not output or not prefix:
+            return
+        exports = dict(self.s.get("ts_exports") or {})
+        exports[ts] = {"output": self._dp(output), "prefix": prefix}
+        self.s["ts_exports"] = exports
+        save_settings(self.s)
+
+    def _ts_assignments(self):
+        """{texture set: {"texture": <out>\\<prefix>_co.paa (or _ca), "rvmat": <out>\\<prefix>.rvmat}} for every
+        texture set of the project that was exported (the active one: the current Output folder / Prefix)."""
+        entries = dict(self.s.get("ts_exports") or {})
+        ts = _active_texture_set_name()
+        out, prefix = self._dp(self.output_edit.text().strip()), self.prefix_edit.text().strip()
+        if ts and out and prefix:
+            entries[ts] = {"output": out, "prefix": prefix}
+        names = set(_texture_set_names())
+        assign = {}
+        for name, e in entries.items():
+            if names and name not in names:
+                continue
+            o, p = e["output"], e["prefix"]
+            ca = any(os.path.isfile(os.path.join(o, f"{p}_ca{x}")) for x in (".paa", ".tga", ".png"))
+            assign[name] = {"texture": os.path.join(o, f"{p}{'_ca' if ca else '_co'}.paa"),
+                            "rvmat": os.path.join(o, f"{p}.rvmat")}
+        return assign
+
+    def on_assign_to_model(self):
+        s = self._collect()
+        model = self._viewer_model(s)
+        assign = self._ts_assignments()
+        if not assign:
+            self.status.setText("Nothing to assign: export the texture sets first (Output folder + Prefix)."); return
+        all_sets = _texture_set_names()
+        missing = [n for n in all_sets if n not in assign]
+        drive = self.s.get("drive", "P:\\").strip() or "P:\\"
+        try:
+            viewer_link.write_assign(model, assign)
+        except Exception as e:
+            self.status.setText(f"Could not write the assignment: {e}"); return
+        lines = [f"Sent to Blender: {len(assign)} texture set(s) - DayZ panel → 'Take Painter materials'."]
+        if missing:
+            lines.append("Not exported yet: " + ", ".join(missing))
+
+        # a single texture set: its material can go straight onto the empty faces of the P3D
+        empty = 0
+        if model and os.path.isfile(model) and len(all_sets) <= 1 and len(assign) == 1:
+            try:
+                empty = p3d_assign.empty_face_count(model)
+            except Exception as e:
+                splog.warning(f"[RwG] {e}")
+        if empty:
+            (ts, a), = assign.items()
+            rel = [paa_tools.mod_relative_path(a[k], drive) for k in ("texture", "rvmat")]
+            refs = [r for r, _ in rel]
+            if not all(on for _, on in rel):
+                lines.append("The P3D was not changed: _co / rvmat are not on the work drive.")
+            else:
+                ask = QtWidgets.QMessageBox.question(
+                    self, "Assign to model",
+                    f"{os.path.basename(model)} has {empty} face(s) without texture and material.\n\n"
+                    f"Give them\n  {refs[0]}\n  {refs[1]}\n\nThe original is kept as .p3d.bak. "
+                    "(Exporting from Blender later overwrites the P3D - Blender gets the assignment too.)")
+                if ask == QtWidgets.QMessageBox.Yes:
+                    try:
+                        n = p3d_assign.fill_empty_faces(model, refs[0], refs[1])
+                        lines.append(f"{n} face(s) of {os.path.basename(model)} assigned.")
+                        self._load_model_materials()
+                        self._push_viewer(with_files=True)
+                    except Exception as e:
+                        lines.append(f"The P3D could not be changed: {e}")
+        self.status.setText("  ".join(lines))
 
     def _ts_material(self, rvmat):
         key = os.path.normcase(rvmat or "")
@@ -2384,6 +2471,9 @@ class RwGDock(QtWidgets.QWidget):
         prefix = self.prefix_edit.text().strip()
         ok, bad = "<span style='color:#7bd88f'>✓</span>", "<span style='color:#ff6b6b'>✗</span>"
         lines = []
+        if getattr(self, "_empty_faces", 0):
+            lines.append(f"{bad} The model has {self._empty_faces} face(s) without texture and material - "
+                         "export, then <b>Assign to model…</b>")
         if m is None:
             if getattr(self, "_model_mats", None):
                 lines.append(f"{bad} Choose which material this texture set paints.")
@@ -3396,6 +3486,7 @@ class RwGDock(QtWidgets.QWidget):
 
             prefix = self._prefix(s)
             self.prefix_edit.setText(prefix)
+            export_ts = _active_texture_set_name()
 
             # Build the export plan from Painter's converted (virtual) maps so
             # the normal takes normal+height+mesh normal, AO is mixed, etc.
@@ -3556,6 +3647,7 @@ class RwGDock(QtWidgets.QWidget):
                         splog.error(f"[RwG] {error}")
                         self.status.setText(f"Error: {error}")
                     else:
+                        self._remember_ts_export(export_ts, s["output"].strip(), prefix)
                         self._finish(summary, s)
                 finally:
                     try:

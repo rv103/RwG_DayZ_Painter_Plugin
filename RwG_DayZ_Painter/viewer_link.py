@@ -18,6 +18,8 @@ LINK_FILE = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
 VIEWER_EXE_NAME = "DayZViewer.exe"
 # the other direction: values edited in the viewer's material panel
 FROM_VIEWER_FILE = os.path.join(os.path.dirname(LINK_FILE), "painterlink.json")
+# texture set -> _co + rvmat, for the Blender add-on (texture sets are named like Blender's materials)
+ASSIGN_FILE = os.path.join(os.path.dirname(LINK_FILE), "painter_assign.json")
 
 
 def _floats(text, count, default):
@@ -98,6 +100,21 @@ def send(model=None, files=None, rvmat=None, material=None, texture_set=None, pr
         json.dump(msg, f)
     os.replace(tmp, LINK_FILE)
     return LINK_FILE
+
+
+def write_assign(model, assign):
+    """Material assignment for the Blender add-on (DayZ Viewer Link): ``assign`` =
+    {texture set: {"texture": P:\\...\\x_co.paa, "rvmat": P:\\...\\x.rvmat}}. The add-on puts them on the
+    Blender materials of the same name (Arma 3 Object Builder properties) and re-exports the P3D."""
+    msg = {"seq": int(time.time() * 1000), "source": "painter", "assign": assign}
+    if model:
+        msg["model"] = os.path.abspath(model)
+    os.makedirs(os.path.dirname(ASSIGN_FILE), exist_ok=True)
+    tmp = ASSIGN_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(msg, f, indent=1)
+    os.replace(tmp, ASSIGN_FILE)
+    return ASSIGN_FILE
 
 
 def read_from_viewer(last_mtime):
