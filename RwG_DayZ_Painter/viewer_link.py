@@ -70,10 +70,11 @@ def export_maps(output_folder, prefix):
     return maps
 
 
-def send(model=None, files=None, rvmat=None, material=None, texture_set=None, proxy=None, maps=None):
+def send(model=None, files=None, rvmat=None, material=None, texture_set=None, proxy=None, maps=None, engine=None):
     """Write one message for the viewer (atomically). Returns the file path.
     ``proxy``: the proxy model (.p3d) the rvmat belongs to - the viewer switches it on.
-    ``maps``: the texture set's exported files by map type (export_maps) - the viewer binds them to the rvmat."""
+    ``maps``: the texture set's exported files by map type (export_maps) - the viewer binds them to the rvmat.
+    ``engine``: "direct" (Buldozer) or "world" (RwG Viewer World) - the viewer opens it, live."""
     msg = {"seq": int(time.time() * 1000), "source": "painter"}
     if model:
         msg["model"] = os.path.abspath(model)
@@ -89,6 +90,8 @@ def send(model=None, files=None, rvmat=None, material=None, texture_set=None, pr
         msg["textureSet"] = texture_set
     if maps:
         msg["maps"] = {kind: [os.path.abspath(f) for f in files_] for kind, files_ in maps.items()}
+    if engine:
+        msg["engine"] = engine
     os.makedirs(os.path.dirname(LINK_FILE), exist_ok=True)
     tmp = LINK_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

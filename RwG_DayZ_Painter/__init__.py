@@ -337,6 +337,7 @@ def load_settings():
         "presets_path": "",
         # DayZ Material Viewer link (model per project, viewer path global)
         "viewer_p3d": "", "viewer_send_export": True, "viewer_live": True, "viewer_exe": "",
+    "viewer_auto": False, "viewer_auto_delay": 5,
         "ts_materials": {},             # texture set name -> rvmat of the model (or a proxy)
     }
     # global machine/UI keys come from the shared file (tool paths, layout)
@@ -929,16 +930,21 @@ class RwGDock(QtWidgets.QWidget):
                 evt = getattr(spevent, name, None)
                 if evt is not None:
                     spevent.DISPATCHER.connect(evt, self._on_project_event)
-                    self._evt_conns.append(evt)
+                    self._evt_conns.append((evt, self._on_project_event))
+            # texture changes (painting, layer edits): the automatic export waits for a pause in them
+            evt = getattr(spevent, "TextureStateEvent", None)
+            if evt is not None:
+                spevent.DISPATCHER.connect(evt, self._on_texture_state)
+                self._evt_conns.append((evt, self._on_texture_state))
         except Exception as e:
             splog.warning(f"[RwG] Could not subscribe to project events: {e}")
 
     def _unsubscribe_project_events(self):
         try:
             import substance_painter.event as spevent
-            for evt in getattr(self, "_evt_conns", []):
+            for evt, callback in getattr(self, "_evt_conns", []):
                 try:
-                    spevent.DISPATCHER.disconnect(evt, self._on_project_event)
+                    spevent.DISPATCHER.disconnect(evt, callback)
                 except Exception:
                     pass
             self._evt_conns = []
@@ -1207,8 +1213,47 @@ class RwGDock(QtWidgets.QWidget):
                             "the material values to the running viewer (no export).")
         send_btn.clicked.connect(lambda: self._push_viewer(announce=True, with_files=True))
         brow.addWidget(send_btn)
+        export_send_btn = QtWidgets.QPushButton("Export && send")
+        export_send_btn.setToolTip("Export the active texture set now (.tga, fast) and send it to the viewer -\n"
+                                   "and from there to Buldozer / RwG Viewer World if they are open.")
+        export_send_btn.clicked.connect(lambda: self._do_export(False, send=True))
+        brow.addWidget(export_send_btn)
         brow.addStretch(1)
         layout.addLayout(brow)
+        # automatic: export and send once painting has paused for a while
+        arow = QtWidgets.QHBoxLayout()
+        self.viewer_auto_cb = QtWidgets.QCheckBox("Auto export && send after")
+        self.viewer_auto_cb.setChecked(self.s.get("viewer_auto", False))
+        self.viewer_auto_cb.setToolTip(
+            "When you stop painting for the set time, export the active texture set (.tga)\n"
+            "and send it to the viewer (and on to Buldozer / RwG Viewer World).\n"
+            "The viewer makes the .paa Buldozer needs itself (ImageToPAA).")
+        self.viewer_auto_cb.toggled.connect(lambda on: (self._collect(), self._auto_timer.stop() if not on else None))
+        arow.addWidget(self.viewer_auto_cb)
+        self.viewer_auto_delay = QtWidgets.QSpinBox()
+        self.viewer_auto_delay.setRange(2, 120)
+        self.viewer_auto_delay.setSuffix(" s")
+        self.viewer_auto_delay.setValue(int(self.s.get("viewer_auto_delay", 5)))
+        self.viewer_auto_delay.setToolTip("Seconds without a change before the automatic export.")
+        self.viewer_auto_delay.valueChanged.connect(lambda _: self._collect())
+        arow.addWidget(self.viewer_auto_delay)
+        arow.addWidget(QtWidgets.QLabel("without a change"))
+        arow.addStretch(1)
+        layout.addLayout(arow)
+        # the DayZ engine, opened by the viewer (it stays the bridge: script, world, .paa, camera)
+        erow = QtWidgets.QHBoxLayout()
+        bz_btn = QtWidgets.QPushButton("Open in Buldozer")
+        bz_btn.setToolTip("The viewer starts Buldozer (DayZDiag, no Object Builder) with this model and\n"
+                          "keeps it live: textures after each export, material values at once.")
+        bz_btn.clicked.connect(lambda: self.on_open_engine("direct"))
+        erow.addWidget(bz_btn)
+        world_btn = QtWidgets.QPushButton("Open in RwG Viewer World")
+        world_btn.setToolTip("The viewer starts the DayZ engine with its world (Utes by default) and puts the\n"
+                             "model on the ground there - live like Buldozer.")
+        world_btn.clicked.connect(lambda: self.on_open_engine("world"))
+        erow.addWidget(world_btn)
+        erow.addStretch(1)
+        layout.addLayout(erow)
 
         # --- Maps tab ---
         end_page()
@@ -2042,6 +2087,8 @@ class RwGDock(QtWidgets.QWidget):
             "viewer_p3d": self.viewer_p3d_edit.text().strip(),
             "viewer_send_export": self.viewer_export_cb.isChecked(),
             "viewer_live": self.viewer_live_cb.isChecked(),
+            "viewer_auto": self.viewer_auto_cb.isChecked(),
+            "viewer_auto_delay": self.viewer_auto_delay.value(),
         })
         save_settings(self.s)
         return self.s
@@ -2081,6 +2128,37 @@ class RwGDock(QtWidgets.QWidget):
         self._viewer_poll.setInterval(250)
         self._viewer_poll.timeout.connect(self._poll_viewer)
         self._viewer_poll.start()
+        # automatic export & send: restarted by every texture change, fires after the pause
+        if getattr(self, "_auto_timer", None) is not None:
+            self._auto_timer.stop()
+        self._auto_timer = QtCore.QTimer(self)
+        self._auto_timer.setSingleShot(True)
+        self._auto_timer.timeout.connect(self._auto_export)
+
+    # ---------- automatic export & send ----------
+    def _on_texture_state(self, *_):
+        """A texture of the project changed (painting, a layer edit ...): wait for the pause."""
+        if getattr(self, "_exporting_auto", False):
+            return                              # our own export
+        if self.viewer_auto_cb.isChecked():
+            self._auto_timer.start(self.viewer_auto_delay.value() * 1000)
+
+    def _auto_export(self):
+        try:
+            if not self.viewer_auto_cb.isChecked() or not substance_painter.project.is_open():
+                return
+            if getattr(self, "_busy", False) or substance_painter.project.is_busy():
+                self._auto_timer.start(1000)    # still computing / converting: try again shortly
+                return
+        except Exception:
+            return
+        self.status.setText("Auto export: painting paused - exporting and sending ...")
+        self._exporting_auto = True
+        try:
+            self._do_export(False, send=True)
+        finally:
+            # changes the export itself causes come right after it: ignored for a moment
+            QtCore.QTimer.singleShot(1500, lambda: setattr(self, "_exporting_auto", False))
 
     def _poll_viewer(self):
         """Take material values edited in the DayZ Material Viewer (painterlink.json).
@@ -2116,9 +2194,28 @@ class RwGDock(QtWidgets.QWidget):
         """The .p3d for the viewer: the field, else found from the project."""
         return s.get("viewer_p3d", "").strip() or self._find_project_p3d()
 
-    def _push_viewer(self, announce=False, with_files=False, files=None):
+    def on_open_engine(self, engine):
+        """Buldozer ("direct") or RwG Viewer World ("world") for this model: the viewer opens it and keeps it
+        live (it stays the bridge: script, world, .paa conversion, camera). Starts the viewer if needed."""
+        s = self._collect()
+        model = self._viewer_model(s)
+        if not model:
+            self.status.setText("No model (.p3d) - set Model (.p3d) first.")
+            return
+        if not viewer_link.viewer_running():
+            try:
+                viewer_link.start_viewer(s.get("viewer_exe", "").strip(), model)
+            except Exception as e:
+                self.status.setText(f"Viewer: {e}")
+                return
+            self.status.setText("Starting the DayZ Material Viewer, then the DayZ engine ...")
+            QtCore.QTimer.singleShot(5000, lambda: self._push_viewer(announce=True, with_files=True, engine=engine))
+            return
+        self._push_viewer(announce=True, with_files=True, engine=engine)
+
+    def _push_viewer(self, announce=False, with_files=False, files=None, engine=None):
         """Send model, written files (or the current ones in the output folder) and the
-        material values to the viewer."""
+        material values to the viewer. ``engine``: "direct" / "world" - the viewer opens that engine view."""
         try:
             # read the fields directly: _collect() would save the settings on every live change
             s = dict(self.s)
@@ -2151,7 +2248,7 @@ class RwGDock(QtWidgets.QWidget):
                 maps = {kind: [self._dp(f) for f in found]
                         for kind, found in viewer_link.export_maps(s["output"].strip(), self._prefix(s)).items()}
             viewer_link.send(model=model, files=files, rvmat=rvmat, material=material, proxy=proxy,
-                             texture_set=_active_texture_set_name(), maps=maps)
+                             texture_set=_active_texture_set_name(), maps=maps, engine=engine)
         except Exception as e:
             splog.warning(f"[RwG] DayZ Material Viewer link: {e}")
             if announce:
@@ -2161,6 +2258,7 @@ class RwGDock(QtWidgets.QWidget):
             self.status.setText(
                 (f"Sent to the DayZ Material Viewer: {os.path.basename(model)}" if model else
                  "Sent material values to the viewer (no model: set Model (.p3d))")
+                + {"direct": " - it opens Buldozer.", "world": " - it opens the RwG Viewer World."}.get(engine, "")
                 + ("" if viewer_link.viewer_running() else " - the viewer is not running."))
 
     def on_browse_viewer_p3d(self):
@@ -3209,11 +3307,14 @@ class RwGDock(QtWidgets.QWidget):
     def _set_busy(self, busy):
         self._busy = busy
 
-    def _do_export(self, make_paa):
+    def _do_export(self, make_paa, send=False):
+        """``send``: tell the viewer afterwards even if 'Send after export' is off (Export & send, auto)."""
         if getattr(self, "_busy", False):
             self.status.setText("Busy - please wait for the current job to finish.")
             return
         s = self._collect()
+        if send:
+            s = dict(s, viewer_send_export=True)
         if s["mode"] == "preset":
             return self._do_export_preset(make_paa, s)
         try:
