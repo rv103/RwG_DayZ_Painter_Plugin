@@ -68,6 +68,24 @@ def params_from_settings(s):
     }
 
 
+_env_urls = {}                     # image file -> resource url of its session import
+
+
+def env_params(image_path):
+    """Shader parameters that make the DayZ In-Game shader reflect ``image_path`` (the rvmat's Stage7 env map,
+    converted to an image Painter can read) instead of Painter's HDRI; None = back to the HDRI. The game tints
+    reflections with that map - env_gold_co makes gold gold."""
+    if not image_path:
+        return {"u_use_env_tex": False}
+    url = _env_urls.get(image_path)
+    if url is None:
+        import substance_painter.resource as spres
+        res = spres.import_session_resource(image_path, spres.Usage.TEXTURE)
+        url = res.identifier().url()
+        _env_urls[image_path] = url
+    return {"u_env_tex": url, "u_use_env_tex": True}
+
+
 def _mapping():
     """Shader instances and which texture set uses which (alg.shaders.shaderInstancesToObject):
     {"shaders": {name: {"shader": "dayz-ingame", "shaderInstance": name, "parameters": ...}},

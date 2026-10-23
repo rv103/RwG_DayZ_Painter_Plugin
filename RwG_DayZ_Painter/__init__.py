@@ -2106,6 +2106,7 @@ class RwGDock(QtWidgets.QWidget):
             edit.textChanged.connect(kick)
         self.mc_source.currentTextChanged.connect(kick)
         self.mc_cb.toggled.connect(kick)
+        self.env_combo.currentTextChanged.connect(kick)         # the env map goes to the shader too
         if self.shader_link_cb.isChecked():
             self._shader_timer.start()
         # the same values go live to the DayZ Material Viewer
@@ -2412,12 +2413,48 @@ class RwGDock(QtWidgets.QWidget):
             "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
         })
 
+    def _env_image(self):
+        """The rvmat's Stage7 environment map (env field, e.g. dz\\...\\env_gold_co.paa on the work drive) as a
+        .tga Painter can load: converted once with ImageToPAA into a cache. None if it can't be found or made."""
+        ref = self.env_combo.currentText().strip()
+        if not ref or ref.startswith("#"):
+            return None
+        drive = self.s.get("drive", "P:\\").strip() or "P:\\"
+        src = ref if os.path.isabs(ref) else paa_tools.abs_from_rel(ref, drive)
+        if not os.path.isfile(src):
+            return None
+        if not src.lower().endswith(".paa"):
+            return src                                  # already an image Painter reads
+        cache = os.path.join(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()), "RwG_DayZ_Painter", "env")
+        stem = os.path.splitext(os.path.basename(src))[0]
+        out = os.path.join(cache, f"{stem}_{int(os.path.getmtime(src))}.tga")
+        if os.path.isfile(out):
+            return out
+        exe = self.s.get("imagetopaa", "").strip() or paa_tools.get_imagetopaa_exe()
+        if not exe or not os.path.isfile(exe):
+            splog.warning("[RwG] ImageToPAA not found - the env map can't be shown in the DayZ In-Game shader.")
+            return None
+        os.makedirs(cache, exist_ok=True)
+        try:
+            subprocess.run([exe, src, out], capture_output=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception as e:
+            splog.warning(f"[RwG] env map conversion failed: {e}")
+            return None
+        return out if os.path.isfile(out) else None
+
     def _push_shader(self, announce=False):
         """Send the values to the DayZ In-Game shader of the ACTIVE texture set only -
-        each texture set paints its own .rvmat (one shared instance is split up)."""
+        each texture set paints its own .rvmat (one shared instance is split up).
+        The rvmat's env map goes along: the game tints reflections with it (env_gold_co -> gold)."""
         ts = _active_texture_set_name()
         try:
-            n = shader_sync.push(self._shader_values(), ts)
+            values = self._shader_values()
+            try:
+                values.update(shader_sync.env_params(self._env_image()))
+            except Exception as e:
+                splog.warning(f"[RwG] env map for the DayZ In-Game shader: {e}")
+            n = shader_sync.push(values, ts)
         except Exception as e:
             splog.warning(f"[RwG] DayZ In-Game shader link: {e}")
             if announce:
