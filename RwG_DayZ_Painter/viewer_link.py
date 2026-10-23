@@ -51,9 +51,29 @@ def material_from_settings(s):
     }
 
 
-def send(model=None, files=None, rvmat=None, material=None, texture_set=None, proxy=None):
+# map types the export writes (prefix + "_" + type); "ca" is the colour map with alpha
+MAP_TYPES = ("co", "ca", "nohq", "smdi", "dtsmdi", "as", "mc", "em")
+MAP_EXTENSIONS = (".tga", ".png", ".paa")
+
+
+def export_maps(output_folder, prefix):
+    """The exported files of a texture set by map type: {"co": [..._co.tga, ..._co.paa], "nohq": [...], ...}.
+    The viewer puts exactly these on the stages of the set's rvmat (no guessing by name or P: path)."""
+    maps = {}
+    if not output_folder or not prefix or not os.path.isdir(output_folder):
+        return maps
+    for kind in MAP_TYPES:
+        found = [f for f in glob.glob(os.path.join(output_folder, f"{prefix}_{kind}.*"))
+                 if f.lower().endswith(MAP_EXTENSIONS)]
+        if found:
+            maps["co" if kind == "ca" and "co" not in maps else kind] = sorted(found)
+    return maps
+
+
+def send(model=None, files=None, rvmat=None, material=None, texture_set=None, proxy=None, maps=None):
     """Write one message for the viewer (atomically). Returns the file path.
-    ``proxy``: the proxy model (.p3d) the rvmat belongs to - the viewer switches it on."""
+    ``proxy``: the proxy model (.p3d) the rvmat belongs to - the viewer switches it on.
+    ``maps``: the texture set's exported files by map type (export_maps) - the viewer binds them to the rvmat."""
     msg = {"seq": int(time.time() * 1000), "source": "painter"}
     if model:
         msg["model"] = os.path.abspath(model)
@@ -67,6 +87,8 @@ def send(model=None, files=None, rvmat=None, material=None, texture_set=None, pr
         msg["material"] = material
     if texture_set:
         msg["textureSet"] = texture_set
+    if maps:
+        msg["maps"] = {kind: [os.path.abspath(f) for f in files_] for kind, files_ in maps.items()}
     os.makedirs(os.path.dirname(LINK_FILE), exist_ok=True)
     tmp = LINK_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

@@ -2144,8 +2144,14 @@ class RwGDock(QtWidgets.QWidget):
             # a proxy's material (stock, handguard ...): the viewer switches that proxy on
             m = self._ts_material(rvmat)
             proxy = m["model"] if m and m["proxy"] else None
+            # the exported maps of this texture set: the viewer binds exactly these to the rvmat (and passes them
+            # on to Buldozer), so no texture of another set or an old export can slip in
+            maps = {}
+            if s.get("output", "").strip():
+                maps = {kind: [self._dp(f) for f in found]
+                        for kind, found in viewer_link.export_maps(s["output"].strip(), self._prefix(s)).items()}
             viewer_link.send(model=model, files=files, rvmat=rvmat, material=material, proxy=proxy,
-                             texture_set=_active_texture_set_name())
+                             texture_set=_active_texture_set_name(), maps=maps)
         except Exception as e:
             splog.warning(f"[RwG] DayZ Material Viewer link: {e}")
             if announce:
