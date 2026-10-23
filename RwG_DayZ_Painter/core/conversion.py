@@ -562,6 +562,49 @@ def convert_smdi_dayz(metal_path, roughness_path, basecolor_path, output_path,
         raise
 
 
+def _dayz_specgloss(spec_path, gloss_path, spec_srgb, specular_power, fresnel_n, fresnel_k,
+                    normalize):
+    """_smdi G and B for PBR spec/gloss maps: Specular = F0 (a Specular colour map is
+    sRGB and is linearised first, a Specular Level map is raw), roughness = 1 -
+    glossiness, then the same maths as convert_smdi_dayz."""
+    if spec_srgb:
+        level = _perceived_brightness(_srgb_to_linear(_load_rgb(spec_path)))
+    else:
+        level = _load_gray(spec_path)
+    rough = 1.0 - _load_gray(gloss_path)
+    green = level / max(fresnel_f0(fresnel_n, fresnel_k), 1e-3)
+    blue = dayz_gloss(rough, specular_power)
+    if normalize:
+        green = green * blue
+    return green, blue
+
+
+def convert_smdi_dayz_specgloss(spec_path, gloss_path, output_path, spec_srgb=True,
+                                specular_power=100.0, fresnel_n=1.5, fresnel_k=0.0,
+                                normalize_highlight=True, specular_factor=1.0,
+                                glossiness_factor=1.0, resolution=1024):
+    """
+    _smdi matched to the DayZ Super shader from PBR spec/gloss maps (Painter's
+    "PBR - Specular Glossiness" channels):
+
+        R = 1.0 (white)
+        G = F0 (Specular) / F0(fresnel stage)  [x B with normalize_highlight]
+        B = (2 / (1 - glossiness)^4 - 2) / specularPower
+    """
+    try:
+        green, blue = _dayz_specgloss(spec_path, gloss_path, spec_srgb, specular_power,
+                                      fresnel_n, fresnel_k, normalize_highlight)
+        green = np.clip(green * specular_factor, 0.0, 1.0)
+        blue = np.clip(blue * glossiness_factor, 0.0, 1.0)
+        _save(np.stack([np.ones_like(green), green, blue], axis=2), output_path, resolution)
+        print(f"_smdi saved (DayZ shader from spec/gloss, specularPower {specular_power}, "
+              f"fresnel F0 {fresnel_f0(fresnel_n, fresnel_k):.3f}): {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating _smdi (DayZ spec/gloss) texture: {e}")
+        raise
+
+
 def _detail_from_maps(detail_paths, shape_hw, strength=1.0):
     """A DT-style grayscale detail channel (average ~0.5, high-frequency) combined
     from one or more height / normal sources, for the _dtsmdi R channel.
@@ -600,7 +643,7 @@ def convert_dtsmdi(metal_path, roughness_path, output_path, method="gltf",
                    detail_paths=None, detail_strength=1.0,
                    specular_factor=1.0, glossiness_factor=1.0, resolution=1024,
                    specular_power=100.0, fresnel_n=1.5, fresnel_k=0.0,
-                   normalize_highlight=True):
+                   normalize_highlight=True, spec_srgb=True):
     """
     _dtsmdi (Detail + SMDI) - the SMDI variant used by the DayZ Multimaterial
     shader, which packs a tiling detail map into the R channel:
@@ -611,11 +654,18 @@ def convert_dtsmdi(metal_path, roughness_path, output_path, method="gltf",
         B = gloss = 1 - roughness
 
     ``method`` selects the green (specular level) exactly like the _smdi
-    variants: 'dayz' | 'gltf' | 'pbr' | 'metrough' | 'specgloss'.
+    variants: 'dayz' | 'gltf' | 'pbr' | 'metrough' | 'specgloss' | 'specgloss_dayz'.
     """
     try:
         # --- green + blue: identical maths to the matching _smdi variant ---
-        if method == "dayz":
+        if method == "specgloss_dayz":
+            if not (spec_path and gloss_path):
+                raise ValueError("dtsmdi 'specgloss_dayz' needs spec + gloss maps.")
+            green, blue = _dayz_specgloss(spec_path, gloss_path, spec_srgb, specular_power,
+                                          fresnel_n, fresnel_k, normalize_highlight)
+            green = np.clip(green * specular_factor, 0.0, 1.0)
+            blue = np.clip(blue * glossiness_factor, 0.0, 1.0)
+        elif method == "dayz":
             if not (metal_path and roughness_path):
                 raise ValueError("dtsmdi 'dayz' needs metallic + roughness.")
             metal = _load_gray(metal_path)

@@ -10,10 +10,13 @@ import json
 
 import substance_painter.js
 
-SHADER_TAG = "dayz-ingame"
+SHADER_TAG = "dayz-ingame"         # also matches the spec/gloss variant dayz-ingame-specgloss
+SPECGLOSS_TAG = "specgloss"
 
 # _smdi source (settings key) -> shader "_smdi method" combobox value
 SMDI_METHOD = {"dayz": 0}          # everything else previews as the glTF-style method
+# spec/gloss variant: the plugin's spec/gloss method -> its "_smdi method" combobox value
+SG_METHOD = {"direct": 0, "dayz": 1}
 
 
 def _instances():
@@ -61,6 +64,7 @@ def params_from_settings(s):
         "u_fresnel_n": _num(s.get("mat_fresnel_n", ""), 0.4),
         "u_fresnel_k": _num(s.get("mat_fresnel_k", ""), 0.2),
         "u_smdi_method": SMDI_METHOD.get(s.get("smdi_source"), 1),
+        "u_smdi_method_sg": SG_METHOD.get(s.get("sg_method"), 0),     # replaced in push()
         "u_g_factor": float(s.get("smdi_green", 1.0)),
         "u_b_factor": float(s.get("smdi_blue", 1.0)),
         "u_mc_show": bool(s.get("mc_on", False)),
@@ -139,10 +143,14 @@ def push(params, texture_set=None):
         if not shaders:
             raise RuntimeError(f"shader instance '{name}' not found among "
                                f"{[s.get('label') for s in _instances()]}")
-    payload = json.dumps(params)
+    params = dict(params)
+    sg_method = params.pop("u_smdi_method_sg", None)
     for sh in shaders:
+        p = params
+        if sg_method is not None and SPECGLOSS_TAG in str(sh.get("url", "")).lower():
+            p = dict(params, u_smdi_method=sg_method)          # same uniform, other meaning
         substance_painter.js.evaluate(
-            f"alg.shaders.setParameters({int(sh['id'])}, {payload})")
+            f"alg.shaders.setParameters({int(sh['id'])}, {json.dumps(p)})")
     return len(shaders)
 
 

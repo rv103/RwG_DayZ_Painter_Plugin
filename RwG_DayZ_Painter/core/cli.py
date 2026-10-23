@@ -104,6 +104,14 @@ def run(args):
                     args.spec, args.gloss, smdi_res)
             else:
                 result["errors"].append("_smdi (metrough): needs metallic + roughness.")
+        elif smdi_mode == "specgloss_dayz":
+            if args.spec_map and args.gloss_map:
+                result["tga"]["_smdi"] = conversion.convert_smdi_dayz_specgloss(
+                    args.spec_map, args.gloss_map, out("_smdi"), not args.spec_map_raw,
+                    args.specular_power, args.fresnel_n, args.fresnel_k,
+                    not args.no_highlight_normalize, args.spec, args.gloss, smdi_res)
+            else:
+                result["errors"].append("_smdi (specgloss_dayz): needs spec + gloss maps.")
         elif smdi_mode == "specgloss":
             if args.spec_map and args.gloss_map:
                 result["tga"]["_smdi"] = conversion.convert_smdi_direct(
@@ -138,7 +146,8 @@ def run(args):
                 specular_factor=args.spec, glossiness_factor=args.gloss,
                 resolution=dt_res, specular_power=args.specular_power,
                 fresnel_n=args.fresnel_n, fresnel_k=args.fresnel_k,
-                normalize_highlight=not args.no_highlight_normalize)
+                normalize_highlight=not args.no_highlight_normalize,
+                spec_srgb=not args.spec_map_raw)
         except Exception as e:
             result["errors"].append(f"_dtsmdi: {e}")
 
@@ -338,11 +347,14 @@ def build_parser():
                    help="Painter Specular map for _smdi green (spec/gloss mode).")
     p.add_argument("--gloss-map", dest="gloss_map",
                    help="Painter Glossiness map for _smdi blue (spec/gloss mode).")
+    p.add_argument("--spec-map-raw", dest="spec_map_raw", action="store_true",
+                   help="--spec-map is a raw Specular Level map (not an sRGB Specular colour); "
+                        "only matters for 'specgloss_dayz'.")
     p.add_argument("--smdi", action="store_true",
                    help="Build the _smdi map. Required to produce it; without it "
                         "the _smdi inputs may still be present for --dtsmdi only.")
     p.add_argument("--smdi-mode", dest="smdi_mode", default="auto",
-                   choices=["auto", "dayz", "specgloss", "metrough", "pbr", "gltf"],
+                   choices=["auto", "dayz", "specgloss", "specgloss_dayz", "metrough", "pbr", "gltf"],
                    help="How to build _smdi. auto = infer from the maps given. dayz = matched "
                         "to the Super shader (needs --specular-power/--fresnel-n/-k of the rvmat).")
     p.add_argument("--specular-power", dest="specular_power", type=float, default=100.0,
@@ -364,7 +376,7 @@ def build_parser():
     p.add_argument("--dtsmdi", action="store_true",
                    help="Also export a _dtsmdi (Detail+SMDI) map for the Multimaterial shader.")
     p.add_argument("--dtsmdi-mode", dest="dtsmdi_mode", default="gltf",
-                   choices=["dayz", "gltf", "pbr", "metrough", "specgloss"],
+                   choices=["dayz", "gltf", "pbr", "metrough", "specgloss", "specgloss_dayz"],
                    help="How to build the _dtsmdi green (specular level), like --smdi-mode.")
     p.add_argument("--dtsmdi-detail", dest="dtsmdi_detail", nargs="+",
                    help="Height/normal source(s) for the _dtsmdi R (detail) channel "

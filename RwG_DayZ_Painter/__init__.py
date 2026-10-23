@@ -323,6 +323,7 @@ def load_settings():
         "em_res": "1024", "mc_res": "2048", "dtsmdi_res": "2048",
         "co_source": "base_color",
         "smdi_source": "dayz",
+        "sg_method": "direct",          # spec/gloss projects: "direct" or "dayz"
         "smdi_green": 1.0, "smdi_blue": 1.0, "dtsmdi_strength": 1.0,
         "preset": "Default", "texview": "",
         "mode": "builtin", "painter_preset": "DayZ", "preset_shelf": "your_assets",
@@ -753,7 +754,8 @@ def maps_from_export_paths(paths):
     found = {}
     # order matters: check 'view2d' before generic tokens
     picks = [("view2d", "view2d"), ("diffuse", "diffuse"), ("basecolor", "basecolor"),
-             ("glossiness", "glossiness"), ("specular", "specular"),
+             ("glossiness", "glossiness"), ("specularlevel", "specularlevel"),
+             ("specular", "specular"),
              ("normal", "normal"), ("height", "height"),
              ("roughness", "roughness"), ("metallic", "metallic"),
              ("emissive", "emissive"), ("emmisive", "emissive"),
@@ -1326,10 +1328,24 @@ class RwGDock(QtWidgets.QWidget):
             "      shader uses B x specularPower as the exponent.\n"
             "Uses specularPower and fresnel N/K of the RVMAT tab - set them (estimate buttons)\n"
             "before exporting. Writing F0 straight into G (Met+Rough, PBR, glTF, Spec+Gloss)\n"
-            "makes non-metals ~25x too dull.")
+            "makes non-metals ~25x too dull.\n\n"
+            "Spec/gloss projects (Glossiness channel, no Metallic) use the method on the right.")
+        # spec/gloss projects: Base Color or Diffuse + Specular Level or Specular + Glossiness
+        self.sg_method = QtWidgets.QComboBox()
+        self.sg_method.addItem("Spec/Gloss: direct", "direct")
+        self.sg_method.addItem("Spec/Gloss: DayZ shader-matched", "dayz")
+        self.sg_method.setCurrentIndex(max(0, self.sg_method.findData(self.s.get("sg_method", "direct"))))
+        self.sg_method.setToolTip(
+            "Only for spec/gloss projects (texture set with a Glossiness channel and no Metallic):\n"
+            "  direct - Specular (Level) -> _smdi G, Glossiness -> _smdi B as painted\n"
+            "           (the classic Arma/DayZ way: you paint the _smdi yourself).\n"
+            "  DayZ shader-matched - Specular = F0 and Glossiness = 1 - roughness (PBR spec/gloss),\n"
+            "           converted like the metal/rough method (uses specularPower and fresnel N/K).\n"
+            "_co comes from Base Color, or Diffuse if the texture set has no Base Color.\n"
+            "Use the RwG DayZ In-Game (Spec/Gloss) shader for the preview.")
         self.smdi_res = self._res_combo("smdi_res", "2048")
         grid.addWidget(self.smdi_cb, 3, 0)
-        grid.addLayout(middle(self.smdi_source), 3, 1)
+        grid.addLayout(middle(self.smdi_source, self.sg_method), 3, 1)
         grid.addWidget(self.smdi_res, 3, 2)
 
         # _dtsmdi (Detail + SMDI) - directly under _smdi; for the Multimaterial
@@ -2066,6 +2082,7 @@ class RwGDock(QtWidgets.QWidget):
             # the only conversions that match the Super shader (see the tooltips)
             "co_source": "base_color",
             "smdi_source": "dayz",
+            "sg_method": self.sg_method.currentData() or "direct",
             # no G/B scaling: it would break the shader match of the _smdi
             "smdi_green": 1.0,
             "smdi_blue": 1.0,
@@ -2106,6 +2123,7 @@ class RwGDock(QtWidgets.QWidget):
             edit.textChanged.connect(kick)
         self.mc_source.currentTextChanged.connect(kick)
         self.mc_cb.toggled.connect(kick)
+        self.sg_method.currentIndexChanged.connect(kick)
         self.env_combo.currentTextChanged.connect(kick)         # the env map goes to the shader too
         if self.shader_link_cb.isChecked():
             self._shader_timer.start()
@@ -2408,6 +2426,7 @@ class RwGDock(QtWidgets.QWidget):
             "mat_fresnel_n": self.mat_fresnel_n.text(),
             "mat_fresnel_k": self.mat_fresnel_k.text(),
             "smdi_source": "dayz",
+            "sg_method": self.sg_method.currentData() or "direct",
             "smdi_green": 1.0,
             "smdi_blue": 1.0,
             "mc_on": self.mc_cb.isChecked(), "mc_source": self.mc_source.currentText(),
@@ -3239,6 +3258,21 @@ class RwGDock(QtWidgets.QWidget):
             pass
         return False
 
+    def _spec_gloss_layout(self):
+        """Spec/gloss texture set (a Glossiness channel plus Specular Level or Specular):
+        {"color": channel of the _co, "spec": channel of the _smdi G}, else None (metal/rough).
+        Covers the classic Arma/DayZ layout (Base Color, Specular Level, Glossiness) and
+        Painter's PBR spec/gloss template (Diffuse, Specular, Glossiness)."""
+        if not self._has_channel("Glossiness"):
+            return None
+        if self._has_channel("SpecularLevel"):
+            spec = "specularlevel"
+        elif self._has_channel("Specular"):
+            spec = "specular"
+        else:
+            return None
+        return {"color": "baseColor" if self._has_channel("BaseColor") else "diffuse", "spec": spec}
+
     def on_prepare_channels(self):
         """Add the Emissive + Opacity channels to the active texture set if they
         are missing (so _em / _ca can be exported)."""
@@ -3371,14 +3405,23 @@ class RwGDock(QtWidgets.QWidget):
                 if not any(o["fileName"] == fn for o in plan):
                     plan.append({"fileName": fn, "srcType": st, "srcName": sn, "mode": mode})
 
+            sg = self._spec_gloss_layout()           # None = metal/rough
+            if sg:
+                splog.info(f"[RwG] Spec/gloss texture set: _co from {sg['color']}, _smdi from "
+                           f"{sg['spec']} + glossiness ({s['sg_method']}).")
+            color_ch = sg["color"] if sg else "baseColor"
             if s["co_on"]:
-                add("$textureSet_baseColor", "documentMap", "baseColor", "rgb")
+                add(f"$textureSet_{color_ch}", "documentMap", color_ch, "rgb")
                 if s["co_alpha"]:                     # _ca variant needs opacity
                     add("$textureSet_opacity", "documentMap", "opacity", "gray")
             if s["nohq_on"]:
                 vname = "Normal_OpenGL" if s["normal_format"] == "opengl" else "Normal_DirectX"
                 add("$textureSet_normal", "virtualMap", vname, "rgb")
-            if s["smdi_on"] or s.get("dtsmdi_on"):
+            if (s["smdi_on"] or s.get("dtsmdi_on")) and sg:
+                add(f"$textureSet_{sg['spec']}", "documentMap", sg["spec"],
+                    "rgb" if sg["spec"] == "specular" else "gray")
+                add("$textureSet_glossiness", "documentMap", "glossiness", "gray")
+            elif s["smdi_on"] or s.get("dtsmdi_on"):
                 add("$textureSet_metallic", "documentMap", "metallic", "gray")
                 add("$textureSet_roughness", "documentMap", "roughness", "gray")
                 # raw albedo carries each metal's F0 for the DayZ method
@@ -3423,17 +3466,32 @@ class RwGDock(QtWidgets.QWidget):
             args += ["--co-mode", "base_color", "--normal-format", "directx",
                      "--spec", str(s["smdi_green"]), "--gloss", str(s["smdi_blue"])]
 
-            if s["co_on"] and maps.get("basecolor"):
-                args += ["--basecolor", maps["basecolor"], "--co-res", s["co_res"]]
+            color_map = maps.get("basecolor") or (maps.get("diffuse") if sg else None)
+            if s["co_on"] and color_map:
+                args += ["--basecolor", color_map, "--co-res", s["co_res"]]
                 if s["co_alpha"]:                     # export as _ca (colour + alpha)
                     args += ["--co-alpha"]
                     if maps.get("opacity"):
                         args += ["--co-opacity", maps["opacity"]]
             if s["nohq_on"] and maps.get("normal"):
                 args += ["--normal", maps["normal"], "--nohq-res", s["nohq_res"]]
-            has_mr = maps.get("metallic") and maps.get("roughness")
-            if (s["smdi_on"] or s.get("dtsmdi_on")) and not has_mr:
-                splog.warning("[RwG] _smdi needs the metallic and roughness channels - not exported.")
+            has_mr = not sg and maps.get("metallic") and maps.get("roughness")
+            spec_map = (maps.get("specularlevel") or maps.get("specular")) if sg else None
+            has_sg = bool(spec_map and maps.get("glossiness"))
+            if (s["smdi_on"] or s.get("dtsmdi_on")) and not (has_mr or has_sg):
+                splog.warning("[RwG] _smdi needs metallic + roughness (or specular + glossiness) "
+                              "- not exported.")
+            if has_sg:
+                sg_mode = "specgloss_dayz" if s["sg_method"] == "dayz" else "specgloss"
+                sg_args = ["--spec-map", spec_map, "--gloss-map", maps["glossiness"]] + \
+                          (["--spec-map-raw"] if maps.get("specularlevel") else []) + s["dayz_rvmat"]
+                if s["smdi_on"]:
+                    args += ["--smdi", "--smdi-mode", sg_mode, "--smdi-res", s["smdi_res"]] + sg_args
+                if s.get("dtsmdi_on"):
+                    args += ["--dtsmdi", "--dtsmdi-res", s["dtsmdi_res"], "--dtsmdi-mode", sg_mode,
+                             "--dtsmdi-strength", str(s["dtsmdi_strength"])] + sg_args
+                    if maps.get("normal"):
+                        args += ["--dtsmdi-detail", maps["normal"]]
             if s["smdi_on"] and has_mr:
                 args += ["--smdi", "--smdi-mode", "dayz",
                          "--metallic", maps["metallic"], "--roughness", maps["roughness"],
